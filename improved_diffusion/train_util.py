@@ -45,7 +45,16 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        teacher:th.nn.Module = None,
+        distill: bool = False
     ):
+        
+        if distill and teacher is None:
+            raise  ValueError(
+                "For distillation teacher model is required. You distillation model is None"
+            )
+            
+        self.teacher = teacher
         self.model = model
         self.diffusion = diffusion
         self.data = data
@@ -92,24 +101,24 @@ class TrainLoop:
                 copy.deepcopy(self.master_params) for _ in range(len(self.ema_rate))
             ]
 
-        if th.cuda.is_available():
-            self.use_ddp = True
-            self.ddp_model = DDP(
-                self.model,
-                device_ids=[dist_util.dev()],
-                output_device=dist_util.dev(),
-                broadcast_buffers=False,
-                bucket_cap_mb=128,
-                find_unused_parameters=False,
-            )
-        else:
-            if dist.get_world_size() > 1:
-                logger.warn(
-                    "Distributed training requires CUDA. "
-                    "Gradients will not be synchronized properly!"
-                )
-            self.use_ddp = False
-            self.ddp_model = self.model
+        # if th.cuda.is_available():
+        #     self.use_ddp = True
+        #     self.ddp_model = DDP(
+        #         self.model,
+        #         device_ids=[dist_util.dev()],
+        #         output_device=dist_util.dev(),
+        #         broadcast_buffers=False,
+        #         bucket_cap_mb=128,
+        #         find_unused_parameters=False,
+        #     )
+        # else:
+        #     if dist.get_world_size() > 1:
+        #         logger.warn(
+        #             "Distributed training requires CUDA. "
+        #             "Gradients will not be synchronized properly!"
+        #         )
+        self.use_ddp = False
+        self.ddp_model = self.model
 
     def _load_and_sync_parameters(self):
         resume_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
@@ -178,12 +187,45 @@ class TrainLoop:
             self.save()
 
     def run_step(self, batch, cond):
-        self.forward_backward(batch, cond)
+        if self._distill:
+            self.forward_backward_distill()
+        else:
+            self.forward_backward(batch, cond)
+        
         if self.use_fp16:
             self.optimize_fp16()
         else:
             self.optimize_normal()
         self.log_step()
+        
+    def forward_backward_distill(self):
+        shape = (1, 3, 64, 64),
+        noise = th.randn(shape).to(dist_util.dev())
+        tragectory = self.diffusion.p_sample_loop(
+            model=self.teacher,
+            shape=shape,
+            noize=noise
+        )
+        sample_batch = [noise]
+        hidden_batch = []
+        for elem in tragectory:
+            sample_batch.append(elem["sample"])
+            hidden_batch.append(elem["bottlenek"])
+            
+        indices = th.randperm(len(sample_batch) - 1)[:self.batch_size]
+        sample_batch = th.stack(sample_batch)[indices]
+        hidden_batch = th.stack(hidden_batch)[indices]
+        
+        t = th.tensor(indices).long().to(dist_util.dev())
+        with th.no_grad():
+            teacher_out, teacher_hidden = self.teacher(sample_batch, t)  
+        student_out, student_hidden = self.ddp_model(sample_batch, t)
+        
+        distill_loss = th.mean((teacher_out - student_out)**2) + \
+            self.lambda_hidden * th.mean((teacher_hidden - student_hidden)**2)
+        
+        distill_loss.backward()
+        
 
     def forward_backward(self, batch, cond):
         zero_grad(self.model_params)

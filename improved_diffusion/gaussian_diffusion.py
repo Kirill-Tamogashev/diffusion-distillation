@@ -123,7 +123,9 @@ class GaussianDiffusion:
         model_var_type,
         loss_type,
         rescale_timesteps=False,
+        activation_proba: float = 0.0
     ):
+        self.activation_proba = th.as_tensor(activation_proba)
         self.model_mean_type = model_mean_type
         self.model_var_type = model_var_type
         self.loss_type = loss_type
@@ -257,7 +259,7 @@ class GaussianDiffusion:
 
         B, C = x.shape[:2]
         assert t.shape == (B,)
-        model_output = model(x, self._scale_timesteps(t), **model_kwargs)
+        model_output, bottlenek = model(x, self._scale_timesteps(t), **model_kwargs)
 
         if self.model_var_type in [ModelVarType.LEARNED, ModelVarType.LEARNED_RANGE]:
             assert model_output.shape == (B, C * 2, *x.shape[2:])
@@ -323,6 +325,7 @@ class GaussianDiffusion:
             "variance": model_variance,
             "log_variance": model_log_variance,
             "pred_xstart": pred_xstart,
+            "bottlenek": bottlenek
         }
 
     def _predict_xstart_from_eps(self, x_t, t, eps):
@@ -384,7 +387,7 @@ class GaussianDiffusion:
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
         sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
-        return {"sample": sample, "pred_xstart": out["pred_xstart"]}
+        return {"sample": sample, "pred_xstart": out["pred_xstart"], "bottlenek": out["bottlenek"]}
 
     def p_sample_loop(
         self,
@@ -414,7 +417,11 @@ class GaussianDiffusion:
         :param progress: if True, show a tqdm progress bar.
         :return: a non-differentiable batch of samples.
         """
+        
+        activation_collections = []
+        
         final = None
+        t = 0
         for sample in self.p_sample_loop_progressive(
             model,
             shape,
@@ -426,7 +433,18 @@ class GaussianDiffusion:
             progress=progress,
         ):
             final = sample
-        return final["sample"]
+
+            activation_collections.append(
+                {
+                    "model_out": sample["sample"],
+                    "model_bottlenek": sample["bottlenek"],
+                }
+            )
+            t += 1
+        return final["sample"], activation_collections
+    
+    # def add_activation(self):
+    #     return th.bernoulli(self.activation_proba).item()
 
     def p_sample_loop_progressive(
         self,

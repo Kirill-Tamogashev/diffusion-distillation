@@ -314,8 +314,11 @@ class UNetModel(nn.Module):
         num_heads=1,
         num_heads_upsample=-1,
         use_scale_shift_norm=False,
+        return_hidden: bool = True
     ):
         super().__init__()
+        
+        self.return_hidden = return_hidden
 
         if num_heads_upsample == -1:
             num_heads_upsample = num_heads
@@ -484,10 +487,17 @@ class UNetModel(nn.Module):
             h = module(h, emb)
             hs.append(h)
         h = self.middle_block(h, emb)
+        if self.return_hidden:
+            bottle_neck = h.copy()
+
         for module in self.output_blocks:
             cat_in = th.cat([h, hs.pop()], dim=1)
             h = module(cat_in, emb)
         h = h.type(x.dtype)
+
+        if self.return_hidden:
+            return self.out(h), bottle_neck
+        
         return self.out(h)
 
     def get_feature_vectors(self, x, timesteps, y=None):
