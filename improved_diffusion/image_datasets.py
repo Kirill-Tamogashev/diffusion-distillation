@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, Dataset
 
 
 def load_data(
-    *, data_dir, batch_size, image_size, class_cond=False, deterministic=False
+    *, data_dir, batch_size, image_size, sample_size, class_cond=False, deterministic=False
 ):
     """
     For a dataset, create a generator over (images, kwargs) pairs.
@@ -38,8 +38,9 @@ def load_data(
         image_size,
         all_files,
         classes=classes,
-        shard=MPI.COMM_WORLD.Get_rank(),
-        num_shards=MPI.COMM_WORLD.Get_size(),
+        sample_size=sample_size
+        # shard=MPI.COMM_WORLD.Get_rank(),
+        # num_shards=MPI.COMM_WORLD.Get_size(),
     )
     if deterministic:
         loader = DataLoader(
@@ -66,11 +67,11 @@ def _list_image_files_recursively(data_dir):
 
 
 class ImageDataset(Dataset):
-    def __init__(self, resolution, image_paths, classes=None, shard=0, num_shards=1):
+    def __init__(self, resolution, image_paths, classes=None, shard=0, num_shards=1, sample_size=10000):
         super().__init__()
         self.resolution = resolution
-        self.local_images = image_paths[shard:][::num_shards]
-        self.local_classes = None if classes is None else classes[shard:][::num_shards]
+        self.local_images = image_paths[:sample_size] #[shard:][::num_shards]
+        self.local_classes = None if classes is None else classes #[shard:][::num_shards]
 
     def __len__(self):
         return len(self.local_images)

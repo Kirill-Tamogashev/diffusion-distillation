@@ -2,6 +2,7 @@ import copy
 import functools
 import os
 
+import wandb
 import blobfile as bf
 import numpy as np
 import torch as th
@@ -30,9 +31,11 @@ class TrainLoop:
     def __init__(
         self,
         *,
-        model,
+        student,
+        teacher,
         diffusion,
         data,
+        device,
         batch_size,
         microbatch,
         lr,
@@ -40,13 +43,27 @@ class TrainLoop:
         log_interval,
         save_interval,
         resume_checkpoint,
+        activation_coeff,
+        main_loss_coeff,
+        neck_coeff,
         use_fp16=False,
         fp16_scale_growth=1e-3,
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        run_name="test-run"
     ):
-        self.model = model
+        self.wandb_run = wandb.init(
+            project="distillation",
+            name=run_name
+        )
+        self.main_loss_coeff = main_loss_coeff,
+        self.activation_coeff = activation_coeff
+        self.neck_coeff = neck_coeff
+        self.teacher = teacher
+        self.device = device
+        
+        self.model = student
         self.diffusion = diffusion
         self.data = data
         self.batch_size = batch_size
@@ -178,12 +195,58 @@ class TrainLoop:
             self.save()
 
     def run_step(self, batch, cond):
-        self.forward_backward(batch, cond)
-        if self.use_fp16:
-            self.optimize_fp16()
-        else:
-            self.optimize_normal()
+        
+        # self.forward_backward(batch, cond)
+        # if self.use_fp16:
+        #     self.optimize_fp16()
+        # else:
+        self.forward_backward_distill(batch)
+        self.optimize_normal()
         self.log_step()
+        
+    def forward_backward_distill(self, batch):
+        zero_grad(self.model_params)
+        batch = batch.to(self.device)
+        
+        t, weights = self.schedule_sampler.sample(batch.shape[0], self.device)
+        noise = th.randn_like(batch)
+        x_t = self.diffusion.q_sample(batch, t, noise=noise)
+
+        compute_losses = functools.partial(
+            self.diffusion.training_losses,
+            self.ddp_model,
+            batch,
+            t
+        )      
+        
+        tch_out, tch_neck = self.teacher(x_t, t)
+        stu_out, stu_neck = self.model(x_t, t)
+        
+        losses = compute_losses()
+        if isinstance(self.schedule_sampler, LossAwareSampler):
+            self.schedule_sampler.update_with_local_losses(
+                t, losses["loss"].detach()
+            )
+
+        loss_activation = th.sum((th.flatten(tch_out, 1, -1) - th.flatten(stu_out, 1, -1))**2, dim=-1)
+        loss_neck = th.sum((th.flatten(tch_neck, 1, -1) - th.flatten(stu_neck, 1, -1))**2, dim=-1)
+        
+        loss = (
+            (losses["loss"] * weights).mean() * self.main_loss_coeff 
+            + loss_activation.mean() * self.activation_coeff
+            + loss_neck.mean() * self.neck_coeff
+        )
+        
+        self.wandb_run.log("train/diffusion loss", (losses["loss"] * weights).mean().item())
+        self.wandb_run.log("train/activation loss", loss_activation.mean().item() )
+        self.wandb_run.log("train/bottle-neck loss", loss_activation.mean().item())
+        self.wandb_run.log("train/main loss", loss.item())
+        
+        log_loss_dict(
+            self.diffusion, t, {k: v * weights for k, v in losses.items()}
+        )
+        loss.backward()    
+
 
     def forward_backward(self, batch, cond):
         zero_grad(self.model_params)

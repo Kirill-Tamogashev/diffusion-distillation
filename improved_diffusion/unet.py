@@ -480,15 +480,17 @@ class UNetModel(nn.Module):
             emb = emb + self.label_emb(y)
 
         h = x.type(self.inner_dtype)
+        neck = h.clone()
         for module in self.input_blocks:
             h = module(h, emb)
             hs.append(h)
         h = self.middle_block(h, emb)
+        
         for module in self.output_blocks:
             cat_in = th.cat([h, hs.pop()], dim=1)
             h = module(cat_in, emb)
         h = h.type(x.dtype)
-        return self.out(h)
+        return self.out(h), neck
 
     def get_feature_vectors(self, x, timesteps, y=None):
         """

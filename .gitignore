@@ -1,8 +1,7 @@
 .DS_Store
 __pycache__/
 **egg-info*
-
-
+wandb
 # Folders with data and checkpoints
 pretrained
 synthesized_images

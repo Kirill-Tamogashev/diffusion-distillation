@@ -4,6 +4,8 @@ Train a diffusion model on images.
 
 import argparse
 
+import torch  as th
+
 from improved_diffusion import dist_util, logger
 from improved_diffusion.image_datasets import load_data
 from improved_diffusion.resample import create_named_schedule_sampler
@@ -23,23 +25,33 @@ def main():
     logger.configure()
 
     logger.log("creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion(
+    student, diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
     )
-    model.to(dist_util.dev())
+    student.to(args.device)
+    teacher, _ = create_model_and_diffusion(
+        **args_to_dict(args, model_and_diffusion_defaults().keys())
+    )
+    teacher.load_state_dict(th.load(args.teacher_model_path, map_location=args.device))
+    
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
-
     logger.log("creating data loader...")
     data = load_data(
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         image_size=args.image_size,
         class_cond=args.class_cond,
+        sample_size=args.sample_size
     )
 
     logger.log("training...")
     TrainLoop(
-        model=model,
+        device=args.device,
+        main_loss_coeff=args.main_loss_coeff,
+        activation_coeff=args.activation_coeff,
+        neck_coeff=args.neck_coeff,
+        teacher=teacher,
+        student=student,
         diffusion=diffusion,
         data=data,
         batch_size=args.batch_size,
@@ -54,11 +66,18 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
+        run_name=args.run_name,
     ).run_loop()
 
 
 def create_argparser():
     defaults = dict(
+        run_name="test-run",
+        device="cuda:0",
+        main_loss_coeff=1.0,
+        activation_coeff=0.001,
+        sample_size=10000,
+        neck_coeff=0.001,
         data_dir="",
         schedule_sampler="uniform",
         lr=1e-4,
