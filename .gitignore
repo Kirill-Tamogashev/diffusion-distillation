@@ -1,3 +1,8 @@
 .DS_Store
 __pycache__/
+**egg-info*
 
+
+# Folders with data and checkpoints
+pretrained
+synthesized_images

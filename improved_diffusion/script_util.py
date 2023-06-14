@@ -13,14 +13,15 @@ def model_and_diffusion_defaults():
     Defaults for image training.
     """
     return dict(
-        image_size=64,
+        run_name="base-name",
+        image_size=256,
         num_channels=128,
         num_res_blocks=2,
-        num_heads=4,
+        num_heads=1,
         num_heads_upsample=-1,
-        attention_resolutions="16,8",
+        attention_resolutions="16",
         dropout=0.0,
-        learn_sigma=False,
+        learn_sigma=True,
         sigma_small=False,
         class_cond=False,
         diffusion_steps=1000,
@@ -28,10 +29,10 @@ def model_and_diffusion_defaults():
         timestep_respacing="",
         use_kl=False,
         predict_xstart=False,
-        rescale_timesteps=True,
-        rescale_learned_sigmas=True,
+        rescale_timesteps=False,
+        rescale_learned_sigmas=False,
         use_checkpoint=False,
-        use_scale_shift_norm=True,
+        use_scale_shift_norm=False,
     )
 
 
@@ -55,6 +56,7 @@ def create_model_and_diffusion(
     rescale_learned_sigmas,
     use_checkpoint,
     use_scale_shift_norm,
+    **kwargs
 ):
     model = create_model(
         image_size,
