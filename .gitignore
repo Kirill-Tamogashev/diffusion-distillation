@@ -2,7 +2,16 @@
 __pycache__/
 **egg-info*
 
+# vscode folders
+.devcontainer
+.vscode
 
 # Folders with data and checkpoints
 pretrained
 synthesized_images
+
+# binaries
+*.sh
+
+# Docker 
+Dockerfile
