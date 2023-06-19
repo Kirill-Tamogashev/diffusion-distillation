@@ -258,7 +258,7 @@ class GaussianDiffusion:
 
         B, C = x.shape[:2]
         assert t.shape == (B,)
-        model_output = model(x, self._scale_timesteps(t), **model_kwargs)
+        model_output, hidden = model(x, self._scale_timesteps(t), **model_kwargs)
 
         if self.model_var_type in [ModelVarType.LEARNED, ModelVarType.LEARNED_RANGE]:
             assert model_output.shape == (B, C * 2, *x.shape[2:])
@@ -320,6 +320,8 @@ class GaussianDiffusion:
             model_mean.shape == model_log_variance.shape == pred_xstart.shape == x.shape
         )
         return {
+            "model_output": model_output,
+            "hidden": hidden,
             "mean": model_mean,
             "variance": model_variance,
             "log_variance": model_log_variance,
@@ -385,7 +387,10 @@ class GaussianDiffusion:
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
         sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
-        return {"sample": sample, "pred_xstart": out["pred_xstart"]}
+        # return {"sample": sample, "pred_xstart": out["pred_xstart"]}
+        redcaled_t = self._scale_timesteps(t)
+        distill_dict = {"eps": out["model_output"], "hidden": out["hidden"], "input": x, "time": redcaled_t}
+        return sample, distill_dict
 
     def p_sample_loop(
         self,
@@ -415,8 +420,9 @@ class GaussianDiffusion:
         :param progress: if True, show a tqdm progress bar.
         :return: a non-differentiable batch of samples.
         """
+        full_path = []
         final = None
-        for sample in self.p_sample_loop_progressive(
+        for sample, distill_dict in self.p_sample_loop_progressive(
             model,
             shape,
             noise=noise,
@@ -427,7 +433,8 @@ class GaussianDiffusion:
             progress=True,
         ):
             final = sample
-        return final["sample"]
+            full_path.append(distill_dict)
+        return final, full_path
 
     def p_sample_loop_progressive(
         self,
@@ -466,7 +473,7 @@ class GaussianDiffusion:
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
             with th.no_grad():
-                out = self.p_sample(
+                img, distill_dict = self.p_sample(
                     model,
                     img,
                     t,
@@ -474,8 +481,8 @@ class GaussianDiffusion:
                     denoised_fn=denoised_fn,
                     model_kwargs=model_kwargs,
                 )
-                yield out
-                img = out["sample"]
+                yield img, distill_dict
+                # img = out["sample"]
 
     def ddim_sample(
         self,

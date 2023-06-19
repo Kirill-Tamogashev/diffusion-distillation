@@ -2,6 +2,8 @@ import copy
 import functools
 import os
 
+from IPython.display import clear_output
+
 import blobfile as bf
 import numpy as np
 import torch as th
@@ -30,9 +32,12 @@ class TrainLoop:
     def __init__(
         self,
         *,
-        model,
-        diffusion,
+        teacher,
+        student,
+        teacher_diffusion,
+        sample_steps,
         data,
+        hidden_coeff,
         batch_size,
         microbatch,
         lr,
@@ -46,8 +51,11 @@ class TrainLoop:
         weight_decay=0.0,
         lr_anneal_steps=0,
     ):
-        self.model = model
-        self.diffusion = diffusion
+        self.hidden_coeff = hidden_coeff
+        self.n_sample_steps = sample_steps
+        self.teacher_model = teacher
+        self.studen_model = student
+        self.teacher_diffusion = teacher_diffusion
         self.data = data
         self.batch_size = batch_size
         self.microbatch = microbatch if microbatch > 0 else batch_size
@@ -184,6 +192,49 @@ class TrainLoop:
         else:
             self.optimize_normal()
         self.log_step()
+        
+    def run_per_batch_distillation(self):
+        global_step = 0
+        for epoch in range(1, self.n_epochs + 1):
+            clear_output(wait=True)
+            logger.log(f"START EPOCH: {epoch}")
+            noise = th.randn((self.batch_size, 3, self.img_size, self.img_size))
+            with th.no_grad():
+                _, full_trajectory = self.teacher_diffusion.p_sample_loop(
+                    model=self.teacher_model,
+                    shape=noise.size(),
+                    clip_denoised=True,
+                    noise=noise
+                )
+            for _ in range(self.n_per_epoch_iterations):
+                idx = th.randint(len(full_trajectory))
+                batch = full_trajectory[idx]
+                losses = self.run_distill_iteration(
+                    x_t=batch["model_input"], 
+                    t=batch["time"],
+                    hidden=batch["hidden"],
+                    eps=batch["eps"],
+                    global_step=global_step
+                )
+                self.optimize_normal()
+                self.wandb_logger.log(losses)
+                global_step += 1
+    
+    def run_distill_iteration(self, x_t, t, hidden, eps, global_step):
+        student_out, student_hidden = self.studen_model(x_t, t)
+        loss_model = th.mean(
+            (student_out.flatten(1) - eps.flatten(1)).pow(2).sum(dim=-1)
+        )
+        loss_hidden = th.mean(
+            (student_hidden.flatten(1) - hidden.flatten(1)).pow(2).sum(dim=-1)
+        )
+        loss = loss_model + loss_hidden * self.hidden_coeff
+        loss.backward()
+        return {
+            "loss": loss.item(), 
+            "loss_hidden": loss_hidden.item(), 
+            "loss_model": loss_model.item()
+        }         
 
     def forward_backward(self, batch, cond):
         zero_grad(self.model_params)
