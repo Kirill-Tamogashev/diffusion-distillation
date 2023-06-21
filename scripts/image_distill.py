@@ -40,6 +40,16 @@ def main():
 
     logger.log(f"run name is {args.run_name}")
     logger.log("training...")
+    logger.log(
+        f"""
+        LR: {args.lr}
+        EPOCHS: {args.n_epochs}
+        N ITERATIONS PER EPOCH {args.n_iterations}
+        BATCH TRAIN: {args.batch_size_train}
+        BATCH SAMPLE: {args.batch_size_sample}
+        HIDDEN LOSS COEFF: {args.hidden_coeff}
+        """
+    )
     TrainLoop(
         teacher=teacher,
         student=student,
@@ -58,9 +68,10 @@ def create_argparser():
         hidden_coeff=0.005,
         diffusion_steps=1_000,
         n_iterations=1500, 
-        weight_decay=0.0,
+        weight_decay=0.1,
         lr_anneal_steps=0,
-        batch_size=4,
+        batch_size_sample=32,
+        batch_size_train=4,
         microbatch=-1,  # -1 disables microbatches
         ema_rate="0.9999",  # comma-separated list of EMA values
         log_interval=10,

@@ -50,7 +50,8 @@ class TrainLoop:
         self.n_epochs = params.n_epochs
         self.n_per_epoch_iterations = params.n_iterations
         self.hidden_coeff = params.hidden_coeff
-        self.batch_size = params.batch_size
+        self.batch_size_sample = params.batch_size_sample
+        self.batch_size_train = params.batch_size_train
         self.lr = params.lr
         self.ema_rate = (
             [params.ema_rate] if isinstance(params.ema_rate, float)
@@ -70,7 +71,7 @@ class TrainLoop:
 
         self.step = 0
         self.resume_step = 0
-        self.global_batch = self.batch_size * dist.get_world_size()
+        self.global_batch = self.batch_size_train * dist.get_world_size()
 
         self.model_params = list(self.student_model.parameters())
         self.master_params = self.model_params
@@ -201,7 +202,7 @@ class TrainLoop:
         for epoch in range(1, self.n_epochs + 1):
             clear_output(wait=True)
             logger.log(f"START EPOCH: {epoch}")
-            noise = th.randn((self.batch_size, 3, self.img_size, self.img_size), device=self.device)
+            noise = th.randn((self.batch_size_sample, 3, self.img_size, self.img_size), device=self.device)
             with th.no_grad():
                 logger.log("START SAMPLING TRAGECTORY")
                 _, full_trajectory = self.teacher_diffusion.p_sample_loop(
@@ -212,13 +213,14 @@ class TrainLoop:
                 )
             logger.log("TRAJECTORY SAMPLED, RUNNING EPOCH ...")
             for _ in tqdm(range(self.n_per_epoch_iterations)):
-                idx = th.randint(len(full_trajectory), (1,)).item()
-                batch = full_trajectory[idx]
+                tau = th.randint(len(full_trajectory), (1,)).item()
+                batch = full_trajectory[tau]
+                batch_idx = th.randint(self.batch_size_sample, (self.batch_size_train,))
                 losses = self.run_distill_iteration(
-                    x_t=batch["input"].to(self.device), 
-                    t=batch["time"].to(self.device),
-                    hidden=batch["hidden"].to(self.device),
-                    eps=batch["eps"].to(self.device),
+                    x_t=batch["input"][batch_idx].to(self.device), 
+                    t=batch["time"][batch_idx].to(self.device),
+                    hidden=batch["hidden"][batch_idx].to(self.device),
+                    eps=batch["eps"][batch_idx].to(self.device),
                 )
                 self.optimize_normal()
                 
@@ -241,6 +243,8 @@ class TrainLoop:
         )
         # print(loss_hidden)
         loss = loss_model + loss_hidden * self.hidden_coeff
+        if th.isnan(loss).any():
+            raise AssertionError("Loss is NaN. Terminating training...")
         loss.backward()
         return {
             "loss": loss.item(), 
