@@ -259,7 +259,7 @@ class GaussianDiffusion:
         B, C = x.shape[:2]
         assert t.shape == (B,)
         model_output, hidden = model(x, self._scale_timesteps(t), **model_kwargs)
-
+        raw_model_output = model_output
         if self.model_var_type in [ModelVarType.LEARNED, ModelVarType.LEARNED_RANGE]:
             assert model_output.shape == (B, C * 2, *x.shape[2:])
             model_output, model_var_values = th.split(model_output, C, dim=1)
@@ -320,7 +320,7 @@ class GaussianDiffusion:
             model_mean.shape == model_log_variance.shape == pred_xstart.shape == x.shape
         )
         return {
-            "model_output": model_output,
+            "model_output": raw_model_output,
             "hidden": hidden,
             "mean": model_mean,
             "variance": model_variance,
@@ -389,7 +389,10 @@ class GaussianDiffusion:
         sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
         # return {"sample": sample, "pred_xstart": out["pred_xstart"]}
         redcaled_t = self._scale_timesteps(t)
-        distill_dict = {"eps": out["model_output"], "hidden": out["hidden"], "input": x, "time": redcaled_t}
+        distill_dict = {
+            "eps": out["model_output"].cpu(), "hidden": out["hidden"].cpu(), 
+            "input": x.cpu(), "time": redcaled_t.cpu()
+        }
         return sample, distill_dict
 
     def p_sample_loop(

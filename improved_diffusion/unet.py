@@ -484,11 +484,12 @@ class UNetModel(nn.Module):
             h = module(h, emb)
             hs.append(h)
         h = self.middle_block(h, emb)
+        hidden = h
         for module in self.output_blocks:
             cat_in = th.cat([h, hs.pop()], dim=1)
             h = module(cat_in, emb)
         h = h.type(x.dtype)
-        return self.out(h)
+        return self.out(h), hidden
 
     def get_feature_vectors(self, x, timesteps, y=None):
         """

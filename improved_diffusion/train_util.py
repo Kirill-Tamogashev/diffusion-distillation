@@ -26,6 +26,8 @@ from .resample import LossAwareSampler, UniformSampler
 # We found that the lg_loss_scale quickly climbed to
 # 20-21 within the first ~1K steps of training.
 INITIAL_LOG_LOSS_SCALE = 20.0
+import wandb
+from tqdm import tqdm
 
 
 class TrainLoop:
@@ -35,57 +37,50 @@ class TrainLoop:
         teacher,
         student,
         teacher_diffusion,
-        sample_steps,
-        data,
-        hidden_coeff,
-        batch_size,
-        microbatch,
-        lr,
-        ema_rate,
-        log_interval,
-        save_interval,
-        resume_checkpoint,
-        use_fp16=False,
-        fp16_scale_growth=1e-3,
-        schedule_sampler=None,
-        weight_decay=0.0,
-        lr_anneal_steps=0,
+        device,
+        params,
     ):
-        self.hidden_coeff = hidden_coeff
-        self.n_sample_steps = sample_steps
+        self.device=device
         self.teacher_model = teacher
-        self.studen_model = student
+        self.student_model = student
         self.teacher_diffusion = teacher_diffusion
-        self.data = data
-        self.batch_size = batch_size
-        self.microbatch = microbatch if microbatch > 0 else batch_size
-        self.lr = lr
+        
+        self.run_name = params.run_name
+        self.img_size = params.img_size
+        self.n_epochs = params.n_epochs
+        self.n_per_epoch_iterations = params.n_iterations
+        self.hidden_coeff = params.hidden_coeff
+        self.batch_size = params.batch_size
+        self.lr = params.lr
         self.ema_rate = (
-            [ema_rate]
-            if isinstance(ema_rate, float)
-            else [float(x) for x in ema_rate.split(",")]
+            [params.ema_rate] if isinstance(params.ema_rate, float)
+            else [float(x) for x in params.ema_rate.split(",")]
         )
-        self.log_interval = log_interval
-        self.save_interval = save_interval
-        self.resume_checkpoint = resume_checkpoint
-        self.use_fp16 = use_fp16
-        self.fp16_scale_growth = fp16_scale_growth
-        self.schedule_sampler = schedule_sampler or UniformSampler(diffusion)
-        self.weight_decay = weight_decay
-        self.lr_anneal_steps = lr_anneal_steps
+        self.log_interval = params.log_interval
+        self.save_interval = params.save_interval
+        self.resume_checkpoint = params.resume_checkpoint
+        # self.n_sample_steps = sample_steps
+        # self.data = data
+        # self.use_fp16 = use_fp16
+        # self.fp16_scale_growth = fp16_scale_growth
+        # self.schedule_sampler = schedule_sampler or UniformSampler(diffusion)
+        # self.microbatch = microbatch if microbatch > 0 else batch_size
+        self.weight_decay = params.weight_decay
+        self.lr_anneal_steps = params.lr_anneal_steps
 
         self.step = 0
         self.resume_step = 0
         self.global_batch = self.batch_size * dist.get_world_size()
 
-        self.model_params = list(self.model.parameters())
+        self.model_params = list(self.student_model.parameters())
         self.master_params = self.model_params
         self.lg_loss_scale = INITIAL_LOG_LOSS_SCALE
         self.sync_cuda = th.cuda.is_available()
 
         self._load_and_sync_parameters()
-        if self.use_fp16:
-            self._setup_fp16()
+        
+        # if self.use_fp16:
+        #     self._setup_fp16()
 
         self.opt = AdamW(self.master_params, lr=self.lr, weight_decay=self.weight_decay)
         if self.resume_step:
@@ -103,7 +98,7 @@ class TrainLoop:
         if th.cuda.is_available():
             self.use_ddp = True
             self.ddp_model = DDP(
-                self.model,
+                self.student_model,
                 device_ids=[dist_util.dev()],
                 output_device=dist_util.dev(),
                 broadcast_buffers=False,
@@ -118,6 +113,15 @@ class TrainLoop:
                 )
             self.use_ddp = False
             self.ddp_model = self.model
+        
+        if self.run_name != "test-run":
+            logger.log("Init wandb logger")
+            self.wandb_logger = wandb.init(
+                project="distillation", 
+                name=self.run_name
+            )
+        else:
+            self.wandb_logger = None
 
     def _load_and_sync_parameters(self):
         resume_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
@@ -132,7 +136,7 @@ class TrainLoop:
                     )
                 )
 
-        dist_util.sync_params(self.model.parameters())
+        dist_util.sync_params(self.student_model.parameters())
 
     def _load_ema_parameters(self, rate):
         ema_params = copy.deepcopy(self.master_params)
@@ -162,72 +166,80 @@ class TrainLoop:
             )
             self.opt.load_state_dict(state_dict)
 
-    def _setup_fp16(self):
-        self.master_params = make_master_params(self.model_params)
-        self.model.convert_to_fp16()
+    # def _setup_fp16(self):
+    #     self.master_params = make_master_params(self.model_params)
+    #     self.model.convert_to_fp16()
 
-    def run_loop(self):
-        while (
-            not self.lr_anneal_steps
-            or self.step + self.resume_step < self.lr_anneal_steps
-        ):
-            batch, cond = next(self.data)
-            self.run_step(batch, cond)
-            if self.step % self.log_interval == 0:
-                logger.dumpkvs()
-            if self.step % self.save_interval == 0:
-                self.save()
-                # Run for a finite amount of time in integration tests.
-                if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
-                    return
-            self.step += 1
-        # Save the last checkpoint if it wasn't already saved.
-        if (self.step - 1) % self.save_interval != 0:
-            self.save()
+    # def run_loop(self):
+    #     while (
+    #         not self.lr_anneal_steps
+    #         or self.step + self.resume_step < self.lr_anneal_steps
+    #     ):
+    #         batch, cond = next(self.data)
+    #         self.run_step(batch, cond)
+    #         if self.step % self.log_interval == 0:
+    #             logger.dumpkvs()
+    #         if self.step % self.save_interval == 0:
+    #             self.save()
+    #             # Run for a finite amount of time in integration tests.
+    #             if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
+    #                 return
+    #         self.step += 1
+    #     # Save the last checkpoint if it wasn't already saved.
+    #     if (self.step - 1) % self.save_interval != 0:
+    #         self.save()
 
-    def run_step(self, batch, cond):
-        self.forward_backward(batch, cond)
-        if self.use_fp16:
-            self.optimize_fp16()
-        else:
-            self.optimize_normal()
-        self.log_step()
+    # def run_step(self, batch, cond):
+    #     self.forward_backward(batch, cond)
+    #     if self.use_fp16:
+    #         self.optimize_fp16()
+    #     else:
+    #         self.optimize_normal()
+    #     self.log_step()
         
     def run_per_batch_distillation(self):
-        global_step = 0
         for epoch in range(1, self.n_epochs + 1):
             clear_output(wait=True)
             logger.log(f"START EPOCH: {epoch}")
-            noise = th.randn((self.batch_size, 3, self.img_size, self.img_size))
+            noise = th.randn((self.batch_size, 3, self.img_size, self.img_size), device=self.device)
             with th.no_grad():
+                logger.log("START SAMPLING TRAGECTORY")
                 _, full_trajectory = self.teacher_diffusion.p_sample_loop(
                     model=self.teacher_model,
                     shape=noise.size(),
                     clip_denoised=True,
                     noise=noise
                 )
-            for _ in range(self.n_per_epoch_iterations):
-                idx = th.randint(len(full_trajectory))
+            logger.log("TRAJECTORY SAMPLED, RUNNING EPOCH ...")
+            for _ in tqdm(range(self.n_per_epoch_iterations)):
+                idx = th.randint(len(full_trajectory), (1,)).item()
                 batch = full_trajectory[idx]
                 losses = self.run_distill_iteration(
-                    x_t=batch["model_input"], 
-                    t=batch["time"],
-                    hidden=batch["hidden"],
-                    eps=batch["eps"],
-                    global_step=global_step
+                    x_t=batch["input"].to(self.device), 
+                    t=batch["time"].to(self.device),
+                    hidden=batch["hidden"].to(self.device),
+                    eps=batch["eps"].to(self.device),
                 )
                 self.optimize_normal()
-                self.wandb_logger.log(losses)
-                global_step += 1
+                
+                if self.wandb_logger is not None:
+                    self.wandb_logger.log(losses)
+                
+                if self.step and self.step % self.save_interval == 0:
+                    self.save()
+                self.step  += 1
     
-    def run_distill_iteration(self, x_t, t, hidden, eps, global_step):
-        student_out, student_hidden = self.studen_model(x_t, t)
+    def run_distill_iteration(self, x_t, t, hidden, eps):
+        student_out, student_hidden = self.student_model(x_t, t)
+        # print
         loss_model = th.mean(
             (student_out.flatten(1) - eps.flatten(1)).pow(2).sum(dim=-1)
         )
+        # print(loss_model)
         loss_hidden = th.mean(
             (student_hidden.flatten(1) - hidden.flatten(1)).pow(2).sum(dim=-1)
         )
+        # print(loss_hidden)
         loss = loss_model + loss_hidden * self.hidden_coeff
         loss.backward()
         return {
@@ -276,21 +288,21 @@ class TrainLoop:
             else:
                 loss.backward()
 
-    def optimize_fp16(self):
-        if any(not th.isfinite(p.grad).all() for p in self.model_params):
-            self.lg_loss_scale -= 1
-            logger.log(f"Found NaN, decreased lg_loss_scale to {self.lg_loss_scale}")
-            return
+    # def optimize_fp16(self):
+    #     if any(not th.isfinite(p.grad).all() for p in self.model_params):
+    #         self.lg_loss_scale -= 1
+    #         logger.log(f"Found NaN, decreased lg_loss_scale to {self.lg_loss_scale}")
+    #         return
 
-        model_grads_to_master_grads(self.model_params, self.master_params)
-        self.master_params[0].grad.mul_(1.0 / (2 ** self.lg_loss_scale))
-        self._log_grad_norm()
-        self._anneal_lr()
-        self.opt.step()
-        for rate, params in zip(self.ema_rate, self.ema_params):
-            update_ema(params, self.master_params, rate=rate)
-        master_params_to_model_params(self.model_params, self.master_params)
-        self.lg_loss_scale += self.fp16_scale_growth
+    #     model_grads_to_master_grads(self.model_params, self.master_params)
+    #     self.master_params[0].grad.mul_(1.0 / (2 ** self.lg_loss_scale))
+    #     self._log_grad_norm()
+    #     self._anneal_lr()
+    #     self.opt.step()
+    #     for rate, params in zip(self.ema_rate, self.ema_params):
+    #         update_ema(params, self.master_params, rate=rate)
+    #     master_params_to_model_params(self.model_params, self.master_params)
+    #     self.lg_loss_scale += self.fp16_scale_growth
 
     def optimize_normal(self):
         self._log_grad_norm()
@@ -345,22 +357,22 @@ class TrainLoop:
         dist.barrier()
 
     def _master_params_to_state_dict(self, master_params):
-        if self.use_fp16:
-            master_params = unflatten_master_params(
-                self.model.parameters(), master_params
-            )
-        state_dict = self.model.state_dict()
-        for i, (name, _value) in enumerate(self.model.named_parameters()):
+        # if self.use_fp16:
+        #     master_params = unflatten_master_params(
+        #         self.model.parameters(), master_params
+        #     )
+        state_dict = self.student_model.state_dict()
+        for i, (name, _value) in enumerate(self.student_model.named_parameters()):
             assert name in state_dict
             state_dict[name] = master_params[i]
         return state_dict
 
     def _state_dict_to_master_params(self, state_dict):
-        params = [state_dict[name] for name, _ in self.model.named_parameters()]
-        if self.use_fp16:
-            return make_master_params(params)
-        else:
-            return params
+        params = [state_dict[name] for name, _ in self.student_model.named_parameters()]
+        # if self.use_fp16:
+        #     return make_master_params(params)
+        # else:
+        return params
 
 
 def parse_resume_step_from_filename(filename):

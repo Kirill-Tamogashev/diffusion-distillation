@@ -6,12 +6,17 @@ __pycache__/
 .devcontainer
 .vscode
 
-# Folders with data and checkpoints
+# Folders with data,logs and checkpoints
 pretrained
 synthesized_images
+logs
+wandb
 
 # binaries
 *.sh
 
 # Docker 
 Dockerfile
+
+#other 
+wdb.py
