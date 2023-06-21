@@ -234,14 +234,12 @@ class TrainLoop:
     def run_distill_iteration(self, x_t, t, hidden, eps):
         student_out, student_hidden = self.student_model(x_t, t)
         # print
-        loss_model = th.mean(
-            (student_out.flatten(1) - eps.flatten(1)).pow(2).sum(dim=-1)
-        )
-        # print(loss_model)
-        loss_hidden = th.mean(
-            (student_hidden.flatten(1) - hidden.flatten(1)).pow(2).sum(dim=-1)
-        )
-        # print(loss_hidden)
+        mse_out = (student_out.flatten(1) - eps.flatten(1)).pow(2)
+        mse_hidden = (student_hidden.flatten(1) - hidden.flatten(1)).pow(2)
+        
+        loss_model = th.mean(mse_out.sum(dim=-1))
+        loss_hidden = th.mean(mse_hidden.sum(dim=-1))
+        
         loss = loss_model + loss_hidden * self.hidden_coeff
         if th.isnan(loss).any():
             raise AssertionError("Loss is NaN. Terminating training...")
@@ -249,7 +247,9 @@ class TrainLoop:
         return {
             "loss": loss.item(), 
             "loss_hidden": loss_hidden.item(), 
-            "loss_model": loss_model.item()
+            "loss_model": loss_model.item(),
+            "loss_hidden_pixelwise": mse_hidden.mean(),
+            "loss_out_pixelwise": mse_out.mean(),
         }         
 
     def forward_backward(self, batch, cond):

@@ -5,10 +5,9 @@ Train a diffusion model on images.
 import argparse
 
 from improved_diffusion import dist_util, logger
-from improved_diffusion.image_datasets import load_data
-from improved_diffusion.resample import create_named_schedule_sampler
 from improved_diffusion.script_util import (
     model_and_diffusion_defaults,
+    create_model,
     create_model_and_diffusion,
     args_to_dict,
     add_dict_to_argparser,
@@ -24,7 +23,7 @@ def main():
     dist_util.setup_dist()
     logger.configure()
 
-    logger.log("creating model and diffusion...")
+    logger.log("creating teacher model and diffusion...")
     teacher, teacher_diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diff_args.keys())
     )
@@ -32,10 +31,13 @@ def main():
         dist_util.load_state_dict(args.model_path, map_location="cpu")
     )
     teacher.to(dist_util.dev())
-    
-    student, _ = create_model_and_diffusion(
+    logger.log("creating student model ...")
+    student, _ = create_model(
         **args_to_dict(args, model_and_diff_args.keys())
     )
+    # student, _ = create_model_and_diffusion(
+        # **args_to_dict(args, model_and_diff_args.keys())
+    # )
     student.to(dist_util.dev())
 
     logger.log(f"run name is {args.run_name}")
@@ -44,6 +46,7 @@ def main():
         f"""
         LR: {args.lr}
         EPOCHS: {args.n_epochs}
+        N DIFFUSION STEPS {args.diffusion_steps}
         N ITERATIONS PER EPOCH {args.n_iterations}
         BATCH TRAIN: {args.batch_size_train}
         BATCH SAMPLE: {args.batch_size_sample}
@@ -62,15 +65,15 @@ def main():
 def create_argparser():
     defaults = dict(
         n_epochs=100,
-        lr=1e-4,
+        lr=1e-5,
         model_path='',
         img_size=256,
         hidden_coeff=0.005,
-        diffusion_steps=1_000,
-        n_iterations=1500, 
-        weight_decay=0.1,
+        diffusion_steps=1000,
+        n_iterations=5000, 
+        weight_decay=0.05,
         lr_anneal_steps=0,
-        batch_size_sample=32,
+        batch_size_sample=16,
         batch_size_train=4,
         microbatch=-1,  # -1 disables microbatches
         ema_rate="0.9999",  # comma-separated list of EMA values

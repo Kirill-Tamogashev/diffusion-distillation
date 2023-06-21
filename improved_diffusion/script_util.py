@@ -97,6 +97,7 @@ def create_model(
     num_heads_upsample,
     use_scale_shift_norm,
     dropout,
+    **kwargs
 ):
     if image_size == 256:
         channel_mult = (1, 1, 2, 2, 4, 4)
