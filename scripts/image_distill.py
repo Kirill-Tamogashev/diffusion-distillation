@@ -1,7 +1,7 @@
 """
 Train a diffusion model on images.
 """
-
+import os
 import argparse
 
 from improved_diffusion import dist_util, logger
@@ -16,6 +16,7 @@ from improved_diffusion.train_util import TrainLoop
 
 
 def main():
+    os.environ["OPENAI_LOGDIR"] = "/home/iddpm/distill_logs"
     args = create_argparser().parse_args()
     model_and_diff_args = model_and_diffusion_defaults()
     model_and_diff_args["diffusion_steps"] = args.diffusion_steps
@@ -32,9 +33,13 @@ def main():
     )
     teacher.to(dist_util.dev())
     logger.log("creating student model ...")
-    student, _ = create_model(
+    student = create_model(
         **args_to_dict(args, model_and_diff_args.keys())
     )
+    if args.reinit:
+        student.load_state_dict(
+            dist_util.load_state_dict(args.reinit_path, map_location="cpu")
+        )
     # student, _ = create_model_and_diffusion(
         # **args_to_dict(args, model_and_diff_args.keys())
     # )
@@ -64,6 +69,8 @@ def main():
 
 def create_argparser():
     defaults = dict(
+        reinit=False,
+        reinit_path="",
         n_epochs=100,
         lr=1e-5,
         model_path='',

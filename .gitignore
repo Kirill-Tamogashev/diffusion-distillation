@@ -11,6 +11,7 @@ pretrained
 synthesized_images
 logs
 wandb
+distill_logs
 
 # binaries
 *.sh
