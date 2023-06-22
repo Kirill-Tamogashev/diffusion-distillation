@@ -8,6 +8,9 @@ import torch as th
 import torch.distributed as dist
 from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 from torch.optim import AdamW
+import wandb
+
+from torchvision.utils import make_grid
 
 from . import dist_util, logger
 from .fp16_util import (
@@ -33,38 +36,31 @@ class TrainLoop:
         model,
         diffusion,
         data,
-        batch_size,
-        microbatch,
-        lr,
-        ema_rate,
-        log_interval,
-        save_interval,
-        resume_checkpoint,
-        use_fp16=False,
-        fp16_scale_growth=1e-3,
-        schedule_sampler=None,
-        weight_decay=0.0,
-        lr_anneal_steps=0,
+        params,
+        schedule_sampler,
+        log_dir
     ):
         self.model = model
         self.diffusion = diffusion
         self.data = data
-        self.batch_size = batch_size
-        self.microbatch = microbatch if microbatch > 0 else batch_size
-        self.lr = lr
+        self.batch_size = params.batch_size
+        self.microbatch = params.microbatch if params.microbatch > 0 else params.batch_size
+        self.lr = params.lr
         self.ema_rate = (
-            [ema_rate]
-            if isinstance(ema_rate, float)
-            else [float(x) for x in ema_rate.split(",")]
+            [params.ema_rate]
+            if isinstance(params.ema_rate, float)
+            else [float(x) for x in params.ema_rate.split(",")]
         )
-        self.log_interval = log_interval
-        self.save_interval = save_interval
-        self.resume_checkpoint = resume_checkpoint
-        self.use_fp16 = use_fp16
-        self.fp16_scale_growth = fp16_scale_growth
+        self.log_pic_interval = params.log_pic_interval
+        self.log_interval = params.log_interval
+        self.save_interval = params.save_interval
+        self.resume_checkpoint = params.resume_checkpoint
+        self.use_fp16 = params.use_fp16
+        self.fp16_scale_growth = params.fp16_scale_growth
         self.schedule_sampler = schedule_sampler or UniformSampler(diffusion)
-        self.weight_decay = weight_decay
-        self.lr_anneal_steps = lr_anneal_steps
+        self.weight_decay = params.weight_decay
+        self.lr_anneal_steps = params.lr_anneal_steps
+        self.image_size = params.image_size
 
         self.step = 0
         self.resume_step = 0
@@ -110,6 +106,15 @@ class TrainLoop:
                 )
             self.use_ddp = False
             self.ddp_model = self.model
+        
+        self.use_wandb = params.use_wandb
+        if self.use_wandb and dist.get_rank() == 0:
+            self.wb_run = wandb.init(
+                dir=log_dir,
+                name=params.run_name,
+                project="distillation",
+                config=params  
+            )
 
     def _load_and_sync_parameters(self):
         resume_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
@@ -157,6 +162,18 @@ class TrainLoop:
     def _setup_fp16(self):
         self.master_params = make_master_params(self.model_params)
         self.model.convert_to_fp16()
+        
+    def log_pics(self):
+        if self.use_wandb and dist.get_rank() == 0:
+            sample = self.diffusion.ddim_sample_loop(
+                self.model,
+                (10, 3, self.image_size, self.image_size),
+                progress=True
+            )
+            sample = ((sample + 1) * 127.5).clamp(0, 255)
+            grid = make_grid(sample, nrow=10)
+            image = wandb.Image(grid, caption=f"Sampled images, step {self.step}")
+            self.wb_run.log({"sampled iamges": image})
 
     def run_loop(self):
         while (
@@ -172,6 +189,9 @@ class TrainLoop:
                 # Run for a finite amount of time in integration tests.
                 if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                     return
+            if self.step % self.log_pic_interval == 0:
+                logger.log("Synthesising images.")
+                self.log_pics()
             self.step += 1
         # Save the last checkpoint if it wasn't already saved.
         if (self.step - 1) % self.save_interval != 0:
@@ -216,6 +236,10 @@ class TrainLoop:
                 )
 
             loss = (losses["loss"] * weights).mean()
+            if self.use_wandb and dist.get_rank() == 0:
+                self.wb_run.log(
+                    {k: (v * weights).mean() for k, v in losses.items()}
+                )
             log_loss_dict(
                 self.diffusion, t, {k: v * weights for k, v in losses.items()}
             )
@@ -354,3 +378,12 @@ def log_loss_dict(diffusion, ts, losses):
         for sub_t, sub_loss in zip(ts.cpu().numpy(), values.detach().cpu().numpy()):
             quartile = int(4 * sub_t / diffusion.num_timesteps)
             logger.logkv_mean(f"{key}_q{quartile}", sub_loss)
+
+
+# def log_loss_dict(diffusion, ts, losses):
+#     for key, values in losses.items():
+#         logger.logkv_mean(key, values.mean().item())
+#         # Log the quantiles (four quartiles, in particular).
+#         for sub_t, sub_loss in zip(ts.cpu().numpy(), values.detach().cpu().numpy()):
+#             quartile = int(4 * sub_t / diffusion.num_timesteps)
+#             logger.logkv_mean(f"{key}_q{quartile}", sub_loss)
