@@ -15,9 +15,13 @@ from improved_diffusion.script_util import (
 from improved_diffusion.train_util import TrainLoop
 
 
+BASE_LOG_DIR = "/home/iddpm/distill_logs"
+
+
 def main():
-    os.environ["OPENAI_LOGDIR"] = "/home/iddpm/distill_logs"
     args = create_argparser().parse_args()
+    os.environ["OPENAI_LOGDIR"] = os.path.join(BASE_LOG_DIR, args.run_name)
+    
     model_and_diff_args = model_and_diffusion_defaults()
     model_and_diff_args["diffusion_steps"] = args.diffusion_steps
 
@@ -75,10 +79,10 @@ def create_argparser():
         lr=1e-5,
         model_path='',
         img_size=256,
-        hidden_coeff=0.005,
+        hidden_coeff=1e-7,
         diffusion_steps=1000,
         n_iterations=5000, 
-        weight_decay=0.05,
+        weight_decay=0.1,
         lr_anneal_steps=0,
         batch_size_sample=16,
         batch_size_train=4,
