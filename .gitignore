@@ -5,3 +5,13 @@ wandb
 # Folders with data and checkpoints
 pretrained
 synthesized_images
+.devcontainer/
+.vscode/
+Dockerfile
+bin/
+data-from-training-jpg/
+distill_logs/
+logs/
+synthetic_dataset/
+wdb.py
+#
