@@ -42,6 +42,15 @@ def main():
     )
 
     logger.log("training...")
+    # logger.log(
+    #     f"""
+    #     LR: {args.lr}
+    #     EPOCHS: {args.n_epochs}
+    #     N DIFFUSION STEPS {args.diffusion_steps}
+    #     N ITERATIONS PER EPOCH {args.n_iterations}
+    #     BATCH TRAIN: {args.batch_size_train}
+    #     """
+    # )
     TrainLoop(
         model=model,
         diffusion=diffusion,
@@ -58,14 +67,14 @@ def create_argparser():
         run_name="test-run",
         schedule_sampler="uniform",
         lr=1e-4,
-        log_pic_interval=20,
         weight_decay=0.0,
         lr_anneal_steps=0,
         batch_size=1,
         microbatch=-1,  # -1 disables microbatches
         ema_rate="0.9999",  # comma-separated list of EMA values
+        log_pic_interval=5_000,
         log_interval=5_000,
-        save_interval=10_000,
+        save_interval=5_000,
         resume_checkpoint="",
         use_fp16=False,
         fp16_scale_growth=1e-3,

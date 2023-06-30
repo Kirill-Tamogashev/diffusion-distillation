@@ -1,0 +1,1 @@
+Checkpoint: ema100000-synthetic-data | FID: 0.00053 | Sample size: 10000

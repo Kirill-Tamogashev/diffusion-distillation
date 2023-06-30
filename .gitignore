@@ -9,6 +9,12 @@ __pycache__/
 # Folders with data and checkpoints
 pretrained
 synthesized_images
+data-from-training-jpg/
+distill_logs/
+logs/
+synthetic_dataset/
+wandb/
+wdb.py
 
 # binaries
 *.sh
