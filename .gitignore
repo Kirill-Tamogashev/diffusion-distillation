@@ -12,6 +12,9 @@ synthesized_images
 logs
 wandb
 distill_logs
+data-from-training-jpg/
+synthetic_dataset/
+
 
 # binaries
 *.sh
