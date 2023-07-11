@@ -1,3 +1,17 @@
 .DS_Store
 __pycache__/
 **.egg*
+
+.devcontainer/
+.vscode/
+Dockerfile
+bin/
+data-from-training-jpg/
+distill_logs/
+logs/
+pretrained/
+stylegan3-fork/
+synthesized_images/
+synthetic_dataset/
+wandb/
+wdb.py
