@@ -35,6 +35,3 @@ class DiscriminatorLoss:
     def _wgan_loss(predicted, real):
         wgan_objective = real.mean() - predicted.mean()
         return - wgan_objective
-        
-    
-    

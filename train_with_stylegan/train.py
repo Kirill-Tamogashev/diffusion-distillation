@@ -50,7 +50,7 @@ def train(args):
 
     params = load_params(args)
     
-    device = torch.device(f"cuda:{args.device}") if torch.cuda.is_available else torch.device("cpud")
+    device = torch.device(f"cuda:{args.device}") if torch.cuda.is_available else torch.device("cpu")
     teacher = configure_unet_model_from_pretrained(args.teacher)
     student = configure_unet_model_from_pretrained(args.teacher)
     
@@ -60,12 +60,12 @@ def train(args):
     teacher.eval()
     student.train()
 
-    discriminator = Discriminator(**params.discriminator, 
-                                  image_resolution=params.training.resolution,
-                                  time_countinious=params.training.sampling_countinious,
-                                  n_timesteps=params.training.n_timesteps)
-    discriminator.to(device)
-    discriminator.train()
+    # discriminator = Discriminator(**params.discriminator, 
+    #                               image_resolution=params.training.resolution,
+    #                               time_countinious=params.training.sampling_countinious,
+    #                               n_timesteps=params.training.n_timesteps)
+    # discriminator.to(device)
+    # discriminator.train()
     log_dir, last_ckpt = configure_checkpoint_path(args)
     if last_ckpt is not None:
         raise AssertionError(
@@ -76,7 +76,7 @@ def train(args):
     DIffGANTrainer(
         teacher=teacher,
         student=student,
-        disc=discriminator,
+        disc=None,
         params=params,
         device=device,
         log_dir=log_dir,

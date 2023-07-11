@@ -57,7 +57,7 @@ class DIffGANTrainer(nn.Module):
 
         self._teacher = teacher
         self._student = student
-        self._disc = disc
+        # self._disc = disc
         self._params = params.training
         self._diffuison_scheduler = DiffusionScheduler(
             b_min=self._params.beta_min,
@@ -71,14 +71,14 @@ class DIffGANTrainer(nn.Module):
         self._lpips.to(self._device)
         
         self._opt_stu = optim.AdamW(student.parameters(), lr=self._params.lr_gen)
-        self._opt_d = optim.AdamW(disc.parameters(), lr=self._params.lr_disc)
+        # self._opt_d = optim.AdamW(disc.parameters(), lr=self._params.lr_disc)
         
         self._scheduler_g = None
-        self._scheduler_d = None
+        # self._scheduler_d = None
         
-        self._ema_stundent = student
-        self._ema_student_state_dict = student.state_dict()
-        self._ema_reload_required = True
+        # self._ema_stundent = student
+        # self._ema_student_state_dict = student.state_dict()
+        # self._ema_reload_required = True
    
     def _sample_t_and_s(self):
         if self._params.sampling_countinious:
@@ -107,11 +107,11 @@ class DIffGANTrainer(nn.Module):
         lambda_prime = 1 - (alpha_t * sigma_s) / (alpha_s * sigma_t)
         
         with torch.no_grad():
-            if self._ema_reload_required:
-                self._ema_stundent.load_state_dict(self._ema_student_state_dict)
-                self._ema_reload_required = False
+            # if self._ema_reload_required:
+            #     self._ema_stundent.load_state_dict(self._ema_student_state_dict)
+            #     self._ema_reload_required = False
 
-            y_t_ema = self._ema_stundent(z, t).sample
+            y_t_ema = self._student(z, t).sample
             x_t_ema = alpha_t * y_t_ema + sigma_t * z
             
             eps_t_ema = self._teacher(x_t_ema.float(), t).sample
@@ -126,10 +126,10 @@ class DIffGANTrainer(nn.Module):
                 self._student, log="gradients", 
                 log_freq=self._params.gen_log_freq
             )
-            wandb.watch(
-                self._disc, log="gradients", 
-                log_freq=self._params.disc_log_freq
-            )
+            # wandb.watch(
+            #     self._disc, log="gradients", 
+            #     log_freq=self._params.disc_log_freq
+            # )
         with tqdm(total=self._params.n_steps) as pbar:
             for step in range(1, self._params.n_steps):
                 
@@ -141,30 +141,43 @@ class DIffGANTrainer(nn.Module):
                 
                 # compute target
                 y_target = self._compute_target(z, t, s)
-                
-                
+
                 y_s = self._student(z, s).sample
                 t_max = torch.ones(self._params.batch_size, device=self._device)
                 y_max_teacher = self._teacher(z, t_max).sample
                 y_max_stu = self._student(z, t_max).sample
                 
-                # Calculate Losses
-                gen_losses = self._optimize_generator(y_s, y_target, y_max_teacher, y_max_stu, s)
-                self._log_losses(gen_losses)
                 
-                if step % self._params.discr_update_freq == 0:
-                    discr_losses = self._optimize_discriminator(y_s, y_target, s)
-                    self._log_losses(discr_losses)
+                mse_loss = F.mse_loss(y_s.float(), y_target.float(), reduction="mean")
+                boundary_loss = F.mse_loss(y_max_stu, y_max_teacher, reduction="mean")
+
+                self._opt_stu.zero_grad()
+                loss = mse_loss + self._params.boundary_coeff * boundary_loss
+                loss.backward()
+                self._opt_stu.step()
+
+                loss_dict = {
+                    "mse": mse_loss,
+                    "boundary": boundary_loss
+                }
+                self._log_losses(loss_dict)
+
+                # # Calculate Losses
+                # gen_losses = self._optimize_generator(y_s, y_target, y_max_teacher, y_max_stu, s)
+                
+                # if step % self._params.discr_update_freq == 0:
+                #     discr_losses = self._optimize_discriminator(y_s, y_target, s)
+                #     self._log_losses(discr_losses)
                 
                 # EMA update
-                if step % self._params.ema_update_freq == 0:
-                    update_ema(
-                        self._student.named_parameters(), 
-                        self._ema_student_state_dict, 
-                        rate=self._params.ema_rate
-                    )
-                    self._ema_student_state_dict = self._student.state_dict()
-                    self._ema_reload_required = True 
+                # if step % self._params.ema_update_freq == 0:
+                #     update_ema(
+                #         self._student.named_parameters(), 
+                #         self._ema_student_state_dict, 
+                #         rate=self._params.ema_rate
+                #     )
+                #     self._ema_student_state_dict = self._student.state_dict()
+                #     self._ema_reload_required = True 
 
                 if step % self._params.image_log_freq == 0:
                     self._generate_images_to_log(step)
@@ -177,9 +190,6 @@ class DIffGANTrainer(nn.Module):
     def _save_checkpoint(self, step):
         ckpt_dict = {
             "student": self._student.state_dict(),
-            "student_ema": self._ema_student_state_dict,
-            "discriminator": self._disc.state_dict(),
-            "discriminator_opt": self._opt_d.state_dict(),
             "student_opt": self._opt_stu.state_dict(),
             "step": step
         }
