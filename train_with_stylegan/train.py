@@ -18,7 +18,7 @@ def parse_args():
     parser = ArgumentParser()
     parser.add_argument("-n", "--name", type=str, required=True)
     parser.add_argument("-t", "--teacher", type=str, choices=TEACHER_MODEL_OPTIONS)
-    parser.add_argument("-p", "--params", type=Path, required=True)
+    parser.add_argument("-p", "--params", type=Path, required=True, default="./train_with_gan/params/boot.yaml")
     parser.add_argument("-d", "--device", type=str, required=True)
     parser.add_argument("--project", type=str, default="diff-to-gan")
     parser.add_argument("--dir", type=Path, required=True)
