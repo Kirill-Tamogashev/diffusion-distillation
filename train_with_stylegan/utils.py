@@ -38,6 +38,8 @@ class DiffusionScheduler:
         else:
             alpha = self._shifts[t]
             sigma = self._sigmas[t]
+        alpha = alpha.reshape(-1, 1, 1, 1)
+        sigma = sigma.reshape(-1, 1, 1, 1)
         return alpha.to(self._device), sigma.to(self._device)
                
 
