@@ -1,0 +1,5 @@
+ml_collections==0.1
+lpips==0.1.4
+accelerate~=0.20
+diffusers~=0.18
+wandb~=0.15

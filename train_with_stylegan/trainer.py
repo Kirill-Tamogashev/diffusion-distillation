@@ -6,20 +6,15 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from torch.distributions import Uniform
-
 from torchvision.utils import make_grid
 import numpy as np
 import wandb
 from tqdm import tqdm
 
-
 from train_with_stylegan.utils import (
-    get_shifts_and_sigmas,
-    configure_unet_model_from_pretrained,
     DiffusionScheduler
 )
-from train_with_stylegan.loss import LPIPS, DiscriminatorLoss
+from train_with_stylegan.loss import LPIPS
 
 
 def update_ema(current_params, ema_params_state_dict, rate=0.999):

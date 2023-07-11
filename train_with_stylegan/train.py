@@ -8,17 +8,17 @@ from ml_collections import ConfigDict
 import torch
 
 from train_with_stylegan.trainer import DIffGANTrainer
-from train_with_stylegan.discriminator import Discriminator
 from train_with_stylegan.utils import configure_unet_model_from_pretrained
 
-from improved_diffusion.unet import UNetModel
+
+TEACHER_MODEL_OPTIONS = ["google/ddpm-cifar10-32"]
 
 
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument("-n", "--name", type=str, required=True)
-    parser.add_argument("-t", "--teacher", type=Path, required=True)
-    parser.add_argument("-p", "--params-path", type=Path, required=True)
+    parser.add_argument("-t", "--teacher", type=str, choices=TEACHER_MODEL_OPTIONS)
+    parser.add_argument("-p", "--params", type=Path, required=True)
     parser.add_argument("-d", "--device", type=str, required=True)
     parser.add_argument("--project", type=str, default="diff-to-gan")
     parser.add_argument("--dir", type=Path, required=True)
@@ -30,7 +30,7 @@ def parse_args():
 
 
 def load_params(args):
-    with args.params_path.open("r") as f:
+    with args.params.open("r") as f:
         config = yaml.safe_load(f)
     return ConfigDict(config)
 
