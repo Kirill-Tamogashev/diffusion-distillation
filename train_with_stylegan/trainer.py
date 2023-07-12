@@ -36,6 +36,7 @@ class DIffGANTrainer(nn.Module):
         self, 
         teacher:    nn.Module, 
         student:    nn.Module,
+        discr:      nn.Module,
         params:     dict,
         device:     torch.device,
         log_dir:    Path,
@@ -45,13 +46,15 @@ class DIffGANTrainer(nn.Module):
         
         
         self._log_dir = log_dir
-        self._run = None # Placeholder for wandb run
+        self._run = None
         self._use_wandb = False
         self._t_delta = t_delta
         self._device = device
 
         self._teacher = teacher
         self._student = student
+        self._discr = discr
+        
         self._params = params.training
         assert self._params.solver in {"heun", "euler"}, "Solver is not known"
         
@@ -66,7 +69,9 @@ class DIffGANTrainer(nn.Module):
         self._lpips = LPIPS()
         self._lpips.to(self._device)
         
+        self._discr_opt = optim.AdamW(self._discr.parameters(), lr=self._params.lr_discr)
         self._opt_stu = optim.AdamW(student.parameters(), lr=self._params.lr_gen)
+        
         self._timesteps = torch.from_numpy(np.arange(0, self._params.n_timesteps))
 
     def _sample_t_and_s(self):
@@ -128,6 +133,10 @@ class DIffGANTrainer(nn.Module):
                 self._student, log="gradients", 
                 log_freq=self._params.gen_log_freq
             )
+            wandb.watch(
+                self._discr, log="gradients", 
+                log_freq=self._params.discr_log_freq
+            )
 
         with tqdm(total=self._params.n_steps) as pbar:
             for step in range(1, self._params.n_steps):
@@ -148,26 +157,19 @@ class DIffGANTrainer(nn.Module):
                 y_s = self._student(z, s).sample
                 y_t_max = self._student(z, t_max).sample
                 
+                # Compute and log losses
+                gen_losses = self._optimize_generator(y_s, y_s_hat, y_t_max, y_t_max_hat, s)
+                self._log_losses(gen_losses)
                 
-                mse_loss = F.mse_loss(y_s, y_s_hat, reduction="mean")
-                boundary_loss = F.mse_loss(y_t_max, y_t_max_hat, reduction="mean")
-
-                self._opt_stu.zero_grad()
-                loss = mse_loss + self._params.boundary_coeff * boundary_loss
-                assert not loss.isnan(), "Loss is nan"
-                
-                loss.backward()
-                self._opt_stu.step()
-                loss_dict = {
-                    "loss": loss.item(),
-                    "mse": mse_loss.item(),
-                    "boundary": boundary_loss.item()
-                }
-                pbar.set_postfix(loss_dict)            
-                self._log_losses(loss_dict)
+                if step % self._params.discr_update_freq == 0:
+                    discr_losses = self._optimize_discriminator(y_s, y_s_hat, s)
+                    self._log_losses(discr_losses)
+                 
+                # Log images
                 if step % self._params.image_log_freq == 0:
                     self._generate_images_to_log(step)
-                    
+                
+                # Save checkpoints
                 if step % self._params.save_ckpt_freq == 0:
                     self._save_checkpoint(step)
                 
@@ -191,7 +193,7 @@ class DIffGANTrainer(nn.Module):
     ) -> dict:
 
         self._opt_stu.zero_grad()
-        gan_loss = F.softplus(- self._disc(pred, s)).mean()
+        gan_loss = F.softplus(- self._discr(pred, s)).mean()
         
         mse_loss = F.mse_loss(pred.float(), target.float(), reduction="mean")
         
@@ -206,8 +208,8 @@ class DIffGANTrainer(nn.Module):
         )
         loss.backward()
         self._opt_stu.step()
-        if self._scheduler_g is not None:
-            self._scheduler_g.step()
+        # if self._scheduler_g is not None:
+        #     self._scheduler_g.step()
         
         loss_dict = {
             "loss":             loss,
@@ -220,18 +222,16 @@ class DIffGANTrainer(nn.Module):
     
     
     def _optimize_discriminator(self, pred, target, s):
-        self._opt_d.zero_grad()
+        self._discr_opt.zero_grad()
         
-        real_logits = self._disc(target, s)
-        loss_d_real = F.softplus(- real_logits).mean()
-        fake_logits = self._disc(pred.detach(), s)
-        loss_d_fake = F.softplus(fake_logits).mean()
+        loss_d_real = F.softplus(- self._discr(target, s)).mean()
+        loss_d_fake = F.softplus(self._discr(pred.detach(), s)).mean()
 
-        d_loss = (loss_d_real + loss_d_fake).float()
+        d_loss = 0.5 * (loss_d_real + loss_d_fake)
         d_loss.backward()
-        self._opt_d.step()
-        if self._scheduler_d is not None:
-            self._scheduler_d.step()
+        self._discr_opt.step()
+        # if self._scheduler_d is not None:
+        #     self._scheduler_d.step()
         
         d_loss_dict = {
             "d_loss":       d_loss,

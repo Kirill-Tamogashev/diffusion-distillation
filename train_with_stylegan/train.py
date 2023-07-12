@@ -9,6 +9,7 @@ import torch
 
 from train_with_stylegan.trainer import DIffGANTrainer
 from train_with_stylegan.utils import configure_unet_model_from_pretrained
+from train_with_stylegan.discriminator import Discriminator
 
 TEACHER_MODEL_OPTIONS = ["google/ddpm-cifar10-32"]
 DEFAULT_CKPT_DIR = Path("wandb-checkpoints")
@@ -18,7 +19,7 @@ def parse_args():
     parser = ArgumentParser()
     parser.add_argument("-n", "--name", type=str, required=True)
     parser.add_argument("-t", "--teacher", type=str, choices=TEACHER_MODEL_OPTIONS)
-    parser.add_argument("-p", "--params", type=Path, default="./train_with_stylegan/params.yaml")
+    parser.add_argument("-p", "--params", type=Path, default="./train_with_stylegan/params/boot-gan.yaml")
     parser.add_argument("-d", "--device", type=str, default=0)
     parser.add_argument("--project", type=str, default="diff-to-gan")
     parser.add_argument("--dir", type=Path, default=DEFAULT_CKPT_DIR)
@@ -59,6 +60,15 @@ def train(args):
     
     teacher.eval()
     student.train()
+    
+    discr = Discriminator(
+        n_timesteps=params.training.n_timesteps,
+        image_resolution=params.training.resolution,
+        time_countinious=params.training.sampling_countinious,
+        **params.discriminator
+    )
+    discr.to(device)
+    discr.train()
 
     log_dir, last_ckpt = configure_checkpoint_path(args)
     if last_ckpt is not None:
@@ -70,6 +80,7 @@ def train(args):
     DIffGANTrainer(
         teacher=teacher,
         student=student,
+        discr=discr,
         params=params,
         device=device,
         log_dir=log_dir,
