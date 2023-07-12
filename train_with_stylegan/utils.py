@@ -41,7 +41,7 @@ class DiffusionScheduler:
         alpha = alpha.reshape(-1, 1, 1, 1)
         sigma = sigma.reshape(-1, 1, 1, 1)
         return alpha.to(self._device), sigma.to(self._device)
-               
+
 
 def get_shifts_and_sigmas(n_steps: int):
     scale = 1000 / n_steps
