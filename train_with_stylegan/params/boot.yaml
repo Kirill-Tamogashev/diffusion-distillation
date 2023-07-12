@@ -1,5 +1,5 @@
 training:
-    solver: euler
+    solver: heun
     batch_size: 128
     n_timesteps: 1000
     sampling_countinious: true 

@@ -71,7 +71,7 @@ class DIffGANTrainer(nn.Module):
 
     def _sample_t_and_s(self):
         t = torch.randint(0, self._params.n_timesteps, (self._params.batch_size, ))
-        s = t - self._params.step_size * self._params.n_steps
+        s = t - self._params.step_size * self._params.n_timesteps
         s = torch.maximum(s, torch.zeros(self._params.batch_size))
             
         return t.to(self._device), s.to(self._device)
@@ -89,17 +89,19 @@ class DIffGANTrainer(nn.Module):
         with torch.no_grad():
 
             y_t = self._student(z, t).sample
+            
             x_t = alpha_t * y_t + sigma_t * z
             eps_t = self._teacher(x_t.float(), t).sample
             f_t = (x_t - sigma_t * eps_t) / alpha_t
+            
             y_target = y_t + lambda_prime * (f_t - y_t)
         return y_target.detach().float()
     
     
-    def _compute_target_heun(self, z, t, s):
+    def _compute_target_heun(self, z, t, s, eps=1e-10):
         alpha_t, sigma_t = self._diffuison_scheduler.get_schedule(t / self._params.n_timesteps)
         alpha_s, sigma_s = self._diffuison_scheduler.get_schedule(s / self._params.n_timesteps)
-        lambda_prime = alpha_s / alpha_t - sigma_s / sigma_t
+        lambda_prime = alpha_s / (alpha_t + eps) +  - sigma_s / (sigma_t + eps)
         
         with torch.no_grad():
 
@@ -152,16 +154,17 @@ class DIffGANTrainer(nn.Module):
 
                 self._opt_stu.zero_grad()
                 loss = mse_loss + self._params.boundary_coeff * boundary_loss
+                assert not loss.isnan(), "Loss is nan"
+                
                 loss.backward()
                 self._opt_stu.step()
-
                 loss_dict = {
-                    "loss": loss,
-                    "mse": mse_loss,
-                    "boundary": boundary_loss
+                    "loss": loss.item(),
+                    "mse": mse_loss.item(),
+                    "boundary": boundary_loss.item()
                 }
+                pbar.set_postfix(loss_dict)            
                 self._log_losses(loss_dict)
-
                 if step % self._params.image_log_freq == 0:
                     self._generate_images_to_log(step)
                     
