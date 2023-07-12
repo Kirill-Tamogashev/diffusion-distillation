@@ -165,7 +165,7 @@ class DIffGANTrainer(nn.Module):
                 }
                 pbar.set_postfix(loss_dict)            
                 self._log_losses(loss_dict)
-                if step % self._params.image_log_freq == 0:
+                if step % self._params.image_log_freq == 0 or (step < 1000 and step % 200 == 0):
                     self._generate_images_to_log(step)
                     
                 if step % self._params.save_ckpt_freq == 0:
