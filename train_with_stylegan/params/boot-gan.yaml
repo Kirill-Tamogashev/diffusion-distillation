@@ -13,7 +13,7 @@ training:
     boundary_coeff: 0.1
     image_log_freq: 1000
     save_ckpt_freq: 5000
-    discr_update_freq: 20
+    discr_update_freq: 1
     beta_max: 19.9
     beta_min: 0.1
     gen_log_freq: 1000
