@@ -1,10 +1,11 @@
 training:
+    solver: euler
     batch_size: 128
     n_timesteps: 1000
     sampling_countinious: true 
     n_steps: 500000
     resolution: 32
-    step_size: 0.1
+    step_size: 0.01
     lr_gen: 0.0001
     mse_coeff: 0.001
     lpips_coeff: 10
