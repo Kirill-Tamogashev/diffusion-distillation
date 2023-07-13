@@ -67,21 +67,3 @@ def unfreeze_weights(model: torch.nn.Module):
 
 def configure_unet_model_from_pretrained(model_config):
     return UNet2DModel.from_pretrained(model_config)
-
-# def condigure_unet_model(unet_params: dict):
-#     return UNet2DModel(
-#         sample_size=...,
-#         in_channels=...,
-#         out_channels=...,
-#         layers_per_block=...,
-#         attention_head_dim=...,
-#         block_out_channels=[...],
-#         down_block_types=[
-#             ...
-#         ],
-#         up_block_types=[
-#             ...
-#         ],
-        
-        
-#     )

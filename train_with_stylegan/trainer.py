@@ -1,4 +1,4 @@
-from functools import partial
+from typing import Tuple
 from pathlib import Path
 
 import torch
@@ -95,10 +95,10 @@ class DIffGANTrainer(nn.Module):
             f_t = (x_t - sigma_t * eps_t) / alpha_t
             
             y_target = y_t + lambda_prime * (f_t - y_t)
-        return y_target.detach().float()
+        return y_target.detach().float(), lambda_prime
     
     
-    def _compute_target_heun(self, z, t, s, eps=1e-10):
+    def _compute_target_heun(self, z, t, s, eps=1e-10) -> Tuple[torch.Tensor, torch.Tensor]:
         alpha_t, sigma_t = self._diffuison_scheduler.get_schedule(t / self._params.n_timesteps)
         alpha_s, sigma_s = self._diffuison_scheduler.get_schedule(s / self._params.n_timesteps)
         lambda_prime = alpha_s / (alpha_t + eps) +  - sigma_s / (sigma_t + eps)
@@ -119,7 +119,7 @@ class DIffGANTrainer(nn.Module):
             
             y_target = y_t + 0.5 * ((f_t - y_t) + (f_s - y_s))
 
-        return y_target.detach().float()
+        return y_target.detach().float(), lambda_prime
     
     def train(self):
 
@@ -139,16 +139,16 @@ class DIffGANTrainer(nn.Module):
                 
                 # compute target for s and t_max
                 if self._params.solver == "euler":
-                    y_s_hat = self._compute_target_euler(z, t, s)
+                    y_s_hat, lambda_prime = self._compute_target_euler(z, t, s)
                 elif self._params.solver == "heun":
-                    y_s_hat = self._compute_target_heun(z, t, s)
+                    y_s_hat, lambda_prime = self._compute_target_heun(z, t, s)
                 y_t_max_hat = self._teacher(z, t_max).sample
                 
                 # compute predictions for s and t_max
                 y_s = self._student(z, s).sample
                 y_t_max = self._student(z, t_max).sample
 
-                mse_loss = F.mse_loss(y_s, y_s_hat, reduction="mean")
+                mse_loss = F.mse_loss(y_s, y_s_hat, reduction="mean") / (self._params.step_size**2)
                 boundary_loss = F.mse_loss(y_t_max, y_t_max_hat, reduction="mean")
 
                 self._opt_stu.zero_grad()
