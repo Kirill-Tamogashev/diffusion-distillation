@@ -208,8 +208,6 @@ class DIffGANTrainer(nn.Module):
         )
         loss.backward()
         self._opt_stu.step()
-        # if self._scheduler_g is not None:
-        #     self._scheduler_g.step()
         
         loss_dict = {
             "loss":             loss,
@@ -268,11 +266,15 @@ class DIffGANTrainer(nn.Module):
             self._run.log(losses)
     
     def _log_images(self, images, message: str = ""):
-        images = wandb.Image(make_grid(images, nrow=10), caption=message)
+        images = make_grid(images, nrow=10).mul(255).clip(0, 255).to(torch.uint8)
+        images = wandb.Image(images, caption=message)
         wandb.log({"sampled images": images})
         
     def _generate_images_to_log(self, step: int, n_images=20):
-        z = torch.randn(n_images, 3, self._params.resolution, self._params.resolution)
-        time = torch.zeros(n_images, device=self._device)
-        images = self._student(z.to(self._device), time).sample
-        self._log_images(images=images, message=f"Images on step {step}")
+        with torch.no_grad():
+            z = torch.randn(n_images, 3, self._params.resolution, self._params.resolution)
+            time = torch.zeros(n_images, device=self._device)
+            images = self._student(z.to(self._device), time).sample
+            images = images.cpu() / 2 + 0.5
+            
+            self._log_images(images=images, message=f"Images on step {step}")
