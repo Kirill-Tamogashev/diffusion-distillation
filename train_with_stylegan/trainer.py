@@ -102,6 +102,7 @@ class DIffGANTrainer(nn.Module):
         alpha_t, sigma_t = self._diffuison_scheduler.get_schedule(t / self._params.n_timesteps)
         alpha_s, sigma_s = self._diffuison_scheduler.get_schedule(s / self._params.n_timesteps)
         lambda_prime = alpha_s / (alpha_t + eps) +  - sigma_s / (sigma_t + eps)
+        # lambda_prime = 1 - (alpha_t * sigma_s) / (alpha_s * sigma_t + eps)
         
         with torch.no_grad():
 

@@ -21,15 +21,11 @@ class DiffusionScheduler:
         if continious:
             self._beta_fn = beta_fn
         else:
-            scale = 1000 / n_steps
-            beta_start = scale * 0.0001
-            beta_end = scale * 0.02
-            alphas = 1 - np.linspace(
-                beta_start, beta_end, n_steps, dtype=np.float64
-            )
+            betas = np.linspace(b_min, b_max, n_steps, dtype=np.float64)
+            alphas = 1 - betas
             alphas_comprod = np.cumprod(alphas)
-            self._shifts = torch.tensor(np.sqrt(alphas_comprod))
-            self._sigmas = torch.tensor(np.sqrt(1 - alphas_comprod))
+            self._shifts = torch.from_numpy(np.sqrt(alphas_comprod))
+            self._sigmas = torch.from_numpy(np.sqrt(1 - alphas_comprod))
             
     def get_schedule(self, t):
         if self._countinious:
@@ -41,29 +37,6 @@ class DiffusionScheduler:
         alpha = alpha.reshape(-1, 1, 1, 1)
         sigma = sigma.reshape(-1, 1, 1, 1)
         return alpha.to(self._device), sigma.to(self._device)
-
-
-def get_shifts_and_sigmas(n_steps: int):
-    scale = 1000 / n_steps
-    beta_start = scale * 0.0001
-    beta_end = scale * 0.02
-    alphas = 1 - np.linspace(
-        beta_start, beta_end, n_steps, dtype=np.float64
-    )
-    alphas_comprod = np.cumprod(alphas)
-    shifts = np.sqrt(alphas_comprod)
-    sigmas = np.sqrt(1 - alphas_comprod)
-    return shifts, sigmas
-
-
-def freeze_weights(model: torch.nn.Module):
-    for _, params in model.named_parameters:
-        params.requires_grad = False
-
-def unfreeze_weights(model: torch.nn.Module):
-    for _, params in model.named_parameters:
-        params.requires_grad = True
-
 
 def configure_unet_model_from_pretrained(model_config):
     return UNet2DModel.from_pretrained(model_config)
