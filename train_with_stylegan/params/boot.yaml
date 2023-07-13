@@ -6,7 +6,7 @@ training:
     n_steps: 500000
     resolution: 32
     step_size: 0.04
-    lr_gen: 0.0003
+    lr_gen: 0.0005
     boundary_coeff: 200
     gen_log_freq: 1000
     image_log_freq: 1000

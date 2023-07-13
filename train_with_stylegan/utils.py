@@ -1,9 +1,52 @@
+from typing import Any
 from diffusers import UNet2DModel
 import numpy as np
 
 import torch
 
+import copy
 
+
+class EMA:
+    def __init__(
+        self,
+        model:  torch.nn.Module,
+        beta:   float = 0.9999, 
+    ):
+        self._beta = beta
+
+        self._model = model
+        self._ema_model = copy.deepcopy(self._model)
+        self._ema_detach_grads()
+        self._ema_model.eval()
+
+    def _ema_detach_grads(self):
+        for param in self._ema_model.parameters():
+            param.detach_()
+        
+    @property
+    def ema(self):
+        return self._ema_model
+    
+    def __call__(self, inputs):
+        return self._ema_model(*inputs)
+    
+    def to(self, device):
+        self._ema_model.to(device)
+        
+    def _update_params(self):
+        for param_ema, param_model in zip(self._ema_model, self._model):
+            param_ema.mul_(self._beta).add_(param_model.data, alpha=1 - self._beta)
+        
+    def _update_buffers(self):
+        for buffer_ema, buffer_model in zip(self._ema_model.buffers(), self._model.model()):
+            buffer_ema.data = buffer_model.date
+        
+    def update(self):
+            self._update_params()
+            self._update_buffers()
+
+    
 class DiffusionScheduler:
     def __init__(
         self, 

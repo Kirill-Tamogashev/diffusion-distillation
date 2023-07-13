@@ -99,8 +99,11 @@ class DIffGANTrainer(nn.Module):
     
     
     def _compute_target_heun(self, z, t, s, eps=1e-10) -> Tuple[torch.Tensor, torch.Tensor]:
-        alpha_t, sigma_t = self._diffuison_scheduler.get_schedule(t / self._params.n_timesteps)
-        alpha_s, sigma_s = self._diffuison_scheduler.get_schedule(s / self._params.n_timesteps)
+        
+        t_tilda = torch.maximum(t / self._params.n_timesteps, torch.tensor(1e-4))
+        s_tilda = torch.maximum(s / self._params.n_timesteps, torch.tensor(1e-4))
+        alpha_t, sigma_t = self._diffuison_scheduler.get_schedule(t_tilda)
+        alpha_s, sigma_s = self._diffuison_scheduler.get_schedule(s_tilda)
         lambda_prime = alpha_s / (alpha_t + eps) +  - sigma_s / (sigma_t + eps)
         # lambda_prime = 1 - (alpha_t * sigma_s) / (alpha_s * sigma_t + eps)
         
@@ -140,16 +143,16 @@ class DIffGANTrainer(nn.Module):
                 
                 # compute target for s and t_max
                 if self._params.solver == "euler":
-                    y_s_hat, lambda_prime = self._compute_target_euler(z, t, s)
+                    y_s_hat, _ = self._compute_target_euler(z, t, s)
                 elif self._params.solver == "heun":
-                    y_s_hat, lambda_prime = self._compute_target_heun(z, t, s)
+                    y_s_hat, _ = self._compute_target_heun(z, t, s)
                 y_t_max_hat = self._teacher(z, t_max).sample
                 
                 # compute predictions for s and t_max
                 y_s = self._student(z, s).sample
                 y_t_max = self._student(z, t_max).sample
 
-                mse_loss = F.mse_loss(y_s, y_s_hat, reduction="mean") / (self._params.step_size**2)
+                mse_loss = F.mse_loss(y_s, y_s_hat, reduction="mean") / (self._params.step_size ** 2)
                 boundary_loss = F.mse_loss(y_t_max, y_t_max_hat, reduction="mean")
 
                 self._opt_stu.zero_grad()
@@ -160,7 +163,7 @@ class DIffGANTrainer(nn.Module):
                 self._opt_stu.step()
                 loss_dict = {
                     "loss": loss.item(),
-                    "mse": mse_loss.item(),
+                    "lpips": mse_loss.item(),
                     "boundary": boundary_loss.item()
                 }
                 pbar.set_postfix(loss_dict)            
