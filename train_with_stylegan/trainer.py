@@ -147,8 +147,7 @@ class DIffGANTrainer(nn.Module):
                 # compute predictions for s and t_max
                 y_s = self._student(z, s).sample
                 y_t_max = self._student(z, t_max).sample
-                
-                
+
                 mse_loss = F.mse_loss(y_s, y_s_hat, reduction="mean")
                 boundary_loss = F.mse_loss(y_t_max, y_t_max_hat, reduction="mean")
 
@@ -181,67 +180,6 @@ class DIffGANTrainer(nn.Module):
         }
         torch.save(ckpt_dict, self._log_dir / f"ckpt-step-{step}.pt")
 
-    def _optimize_generator(
-        self, 
-        pred:           torch.Tensor, 
-        target:         torch.Tensor,
-        y_stu_max:      torch.Tensor,
-        y_target_max:   torch.Tensor,
-        s:              torch.Tensor,
-    ) -> dict:
-
-        self._opt_stu.zero_grad()
-        gan_loss = F.softplus(- self._disc(pred, s)).mean()
-        
-        mse_loss = F.mse_loss(pred.float(), target.float(), reduction="mean")
-        
-        lpips_loss = self._lpips.calc_loss(pred.float(), target.float()).squeeze().mean()
-        
-        boundary_loss = F.mse_loss(y_stu_max, y_target_max)
-        loss = (
-            gan_loss
-            + self._params.mse_coeff * mse_loss
-            + self._params.lpips_coeff * lpips_loss
-            + self._params.boundary_coeff * boundary_loss
-        )
-        loss.backward()
-        self._opt_stu.step()
-        if self._scheduler_g is not None:
-            self._scheduler_g.step()
-        
-        loss_dict = {
-            "loss":             loss,
-            "gan_loss":         gan_loss,
-            "mse_loss":         mse_loss,
-            "lpips":            lpips_loss,
-            "boundary_loss":    boundary_loss,
-        }
-        return loss_dict
-    
-    
-    def _optimize_discriminator(self, pred, target, s):
-        self._opt_d.zero_grad()
-        
-        real_logits = self._disc(target, s)
-        loss_d_real = F.softplus(- real_logits).mean()
-        fake_logits = self._disc(pred.detach(), s)
-        loss_d_fake = F.softplus(fake_logits).mean()
-
-        d_loss = (loss_d_real + loss_d_fake).float()
-        d_loss.backward()
-        self._opt_d.step()
-        if self._scheduler_d is not None:
-            self._scheduler_d.step()
-        
-        d_loss_dict = {
-            "d_loss":       d_loss,
-            "loss_d_real":  loss_d_real,
-            "loss_d_fake":  loss_d_fake
-        }
-        return d_loss_dict
-        
-            
-                
     def run_training(self, args):
         """Wraps wandb usage for training."""
         self._use_wandb = args.use_wandb
@@ -268,11 +206,15 @@ class DIffGANTrainer(nn.Module):
             self._run.log(losses)
     
     def _log_images(self, images, message: str = ""):
-        images = wandb.Image(make_grid(images, nrow=10), caption=message)
-        wandb.log({"sampled images": images})
+        grid = make_grid(images, nrow=10).permute(1, 2, 0)
+        grid = grid.data.numpy().astype(np.uint8)
+        wandb.log({"sampled images": wandb.Image(grid, caption=message)})
         
     def _generate_images_to_log(self, step: int, n_images=20):
-        z = torch.randn(n_images, 3, self._params.resolution, self._params.resolution)
-        time = torch.zeros(n_images, device=self._device)
-        images = self._student(z.to(self._device), time).sample
-        self._log_images(images=images, message=f"Images on step {step}")
+        with torch.no_grad():
+            z = torch.randn(n_images, 3, self._params.resolution, self._params.resolution)
+            time = torch.zeros(n_images, device=self._device)
+            images = self._student(z.to(self._device), time).sample
+            
+            images = images.cpu() / 2.0 + 0.5
+            self._log_images(images=images, message=f"Images on step {step}")
