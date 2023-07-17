@@ -1,6 +1,6 @@
 training:
     solver: heun
-    batch_size: 128
+    batch_size: 96
     n_timesteps: 1000
     sampling_countinious: true 
     n_steps: 500000

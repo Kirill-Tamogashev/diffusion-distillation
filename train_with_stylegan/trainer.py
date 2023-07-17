@@ -40,10 +40,11 @@ class DIffGANTrainer(nn.Module):
         device:     torch.device,
         log_dir:    Path,
         t_delta:    float = 0.001,
+        rank:       int = 0
     ):
         super().__init__()
         
-        
+        self._rank = rank
         self._log_dir = log_dir
         self._run = None # Placeholder for wandb run
         self._use_wandb = False
@@ -63,8 +64,8 @@ class DIffGANTrainer(nn.Module):
             device=self._device
         )
         
-        self._lpips = LPIPS()
-        self._lpips.to(self._device)
+        # self._lpips = LPIPS()
+        # self._lpips.to(self._device)
         
         self._opt_stu = optim.AdamW(student.parameters(), lr=self._params.lr_gen)
         self._timesteps = torch.from_numpy(np.arange(0, self._params.n_timesteps))
@@ -127,7 +128,7 @@ class DIffGANTrainer(nn.Module):
     
     def train(self):
 
-        if self._use_wandb:
+        if self._use_wandb and self._rank == 0:
             wandb.watch(
                 self._student, log="gradients", 
                 log_freq=self._params.gen_log_freq
@@ -166,12 +167,14 @@ class DIffGANTrainer(nn.Module):
                     "lpips": mse_loss.item(),
                     "boundary": boundary_loss.item()
                 }
-                pbar.set_postfix(loss_dict)            
-                self._log_losses(loss_dict)
-                if step % self._params.image_log_freq == 0 or (step < 1000 and step % 200 == 0):
+                # pbar.set_postfix(loss_dict)
+                if self._rank == 0:
+                    self._log_losses(loss_dict)
+
+                if step % self._params.image_log_freq == 0 and self._rank == 0:
                     self._generate_images_to_log(step)
                     
-                if step % self._params.save_ckpt_freq == 0:
+                if step % self._params.save_ckpt_freq == 0 and self._rank == 0:
                     self._save_checkpoint(step)
                 
                 pbar.update()
@@ -187,7 +190,7 @@ class DIffGANTrainer(nn.Module):
     def run_training(self, args):
         """Wraps wandb usage for training."""
         self._use_wandb = args.use_wandb
-        if self._use_wandb:
+        if self._use_wandb and self._rank == 0:
             wandb_config = dict(
                 dir=args.dir,
                 config=self._params,
