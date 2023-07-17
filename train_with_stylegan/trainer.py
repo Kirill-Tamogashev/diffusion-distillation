@@ -36,17 +36,17 @@ class DIffGANTrainer(nn.Module):
         self, 
         teacher:    nn.Module, 
         student:    nn.Module,
-        params:     dict,
+        params,
         device:     torch.device,
         log_dir:    Path,
         t_delta:    float = 0.001,
         rank:       int = 0
-    ):
+    ) -> None:
         super().__init__()
         
         self._rank = rank
         self._log_dir = log_dir
-        self._run = None # Placeholder for wandb run
+        self._run = None  # Placeholder for wandb run
         self._use_wandb = False
         self._t_delta = t_delta
         self._device = device
@@ -56,7 +56,7 @@ class DIffGANTrainer(nn.Module):
         self._params = params.training
         assert self._params.solver in {"heun", "euler"}, "Solver is not known"
         
-        self._diffuison_scheduler = DiffusionScheduler(
+        self._diffusion_scheduler = DiffusionScheduler(
             b_min=self._params.beta_min,
             b_max=self._params.beta_max,
             n_steps=self._params.n_steps,
@@ -81,10 +81,10 @@ class DIffGANTrainer(nn.Module):
         """
         y(t) = y_student_theta(eps, t)
         x_t = alpha_t * y_t + sigma_t * z_t
-        y(s)_target = SG[y(t) + lmbda * delta * (f_teacher(x_t, t) - y(t))]
+        y(s)_target = SG[y(t) + lambda * delta * (f_teacher(x_t, t) - y(t))]
         """
-        alpha_t, sigma_t = self._diffuison_scheduler.get_schedule(t / self._params.n_timesteps)
-        alpha_s, sigma_s = self._diffuison_scheduler.get_schedule(s / self._params.n_timesteps)
+        alpha_t, sigma_t = self._diffusion_scheduler.get_schedule(t / self._params.n_timesteps)
+        alpha_s, sigma_s = self._diffusion_scheduler.get_schedule(s / self._params.n_timesteps)
         lambda_prime = alpha_s / alpha_t - sigma_s / sigma_t
         
         with torch.no_grad():
@@ -97,17 +97,15 @@ class DIffGANTrainer(nn.Module):
             
             y_target = y_t + lambda_prime * (f_t - y_t)
         return y_target.detach().float(), lambda_prime
-    
-    
+
     def _compute_target_heun(self, z, t, s, eps=1e-10) -> Tuple[torch.Tensor, torch.Tensor]:
         
         t_tilda = torch.maximum(t / self._params.n_timesteps, torch.tensor(1e-4))
         s_tilda = torch.maximum(s / self._params.n_timesteps, torch.tensor(1e-4))
-        alpha_t, sigma_t = self._diffuison_scheduler.get_schedule(t_tilda)
-        alpha_s, sigma_s = self._diffuison_scheduler.get_schedule(s_tilda)
-        lambda_prime = alpha_s / (alpha_t + eps) +  - sigma_s / (sigma_t + eps)
-        # lambda_prime = 1 - (alpha_t * sigma_s) / (alpha_s * sigma_t + eps)
-        
+        alpha_t, sigma_t = self._diffusion_scheduler.get_schedule(t_tilda)
+        alpha_s, sigma_s = self._diffusion_scheduler.get_schedule(s_tilda)
+        lambda_prime = alpha_s / (alpha_t + eps) - sigma_s / (sigma_t + eps)
+
         with torch.no_grad():
 
             y_t = self._student(z, t).sample
@@ -126,7 +124,7 @@ class DIffGANTrainer(nn.Module):
 
         return y_target.detach().float(), lambda_prime
     
-    def train(self):
+    def train(self, *args):
 
         if self._use_wandb and self._rank == 0:
             wandb.watch(
@@ -172,12 +170,51 @@ class DIffGANTrainer(nn.Module):
                     self._log_losses(loss_dict)
 
                 if step % self._params.image_log_freq == 0 and self._rank == 0:
-                    self._generate_images_to_log(step)
+                    self._generate_student_images_to_log(step)
+                    self._generate_teacher_images_to_log(step)
                     
                 if step % self._params.save_ckpt_freq == 0 and self._rank == 0:
                     self._save_checkpoint(step)
                 
                 pbar.update()
+
+    def get_teacher_step(
+            self,
+            model_input:    torch.Tensor,
+            t:              torch.Tensor,
+            x_t:            torch.Tensor,
+    ):
+        t_tilda = torch.maximum(t / self._params.n_timesteps, torch.tensor(1e-4))
+        t_prev_tilda = torch.maximum((t - 1) / self._params.n_timesteps, torch.tensor(1e-4))
+
+        alpha_t, sigma_t = self._diffusion_scheduler.get_schedule(t_tilda)
+        alpha_prev, sigma_prev = self._diffusion_scheduler.get_schedule(t_prev_tilda)
+        pred_original_sample = (x_t - sigma_t * model_input) / alpha_t
+        pred_original_sample.clamp_(-1, 1)
+
+        pred_original_sample_coeff = (alpha_prev / sigma_t**2) * (1 - alpha_t / alpha_prev)
+        current_sample_coeff = torch.sqrt(alpha_t / alpha_prev) * (sigma_prev**2 / sigma_t**2)
+        pred_prev_sample = pred_original_sample_coeff * pred_original_sample + current_sample_coeff * x_t
+
+        curr_std = sigma_t / sigma_prev
+        return pred_prev_sample + curr_std * torch.randn_like(pred_prev_sample, device=self._device)
+
+    def sample_with_teacher(self, n_images: int = 20):
+
+        images = torch.randn(
+            n_images,
+            3,
+            self._params.resolution,
+            self._params.resolution
+        )
+        images = images.to(self._device)
+
+        for t in tqdm(self._timesteps[::-1], desc="Sampling images with teacher...", leave=False):
+            model_output = self._teacher(images, t).sample
+            images = self.get_teacher_step(model_output, t, images)
+
+        images = images.cpu() / 2.0 + 0.5
+        return images
 
     def _save_checkpoint(self, step):
         ckpt_dict = {
@@ -204,24 +241,27 @@ class DIffGANTrainer(nn.Module):
                 self.train()
         else:
             self.train()
-            
-            
+
     def _log_losses(self, losses: dict, stage: str = "train"):
         if self._use_wandb:
-            
-            losses = {f"{stage}/{key}" : value for key, value in losses.items()}
+            losses = {f"{stage}/{key}": value for key, value in losses.items()}
             self._run.log(losses)
-    
-    def _log_images(self, images, message: str = ""):
+
+    @staticmethod
+    def _log_images(images, message: str = ""):
         grid = make_grid(images, nrow=10).permute(1, 2, 0)
         grid = grid.data.numpy().astype(np.uint8)
         wandb.log({"sampled images": wandb.Image(grid, caption=message)})
-        
-    def _generate_images_to_log(self, step: int, n_images=20):
+
+    def _generate_student_images_to_log(self, step: int, n_images=20):
         with torch.no_grad():
             z = torch.randn(n_images, 3, self._params.resolution, self._params.resolution)
             time = torch.zeros(n_images, device=self._device)
             images = self._student(z.to(self._device), time).sample
             
             images = images.cpu() / 2.0 + 0.5
-            self._log_images(images=images, message=f"Images on step {step}")
+            self._log_images(images=images, message=f"Student images on step {step}")
+
+    def _generate_teacher_images_to_log(self, step, n_images=20):
+        images = self.sample_with_teacher(n_images=n_images)
+        self._log_images(images=images, message=f"Teacher images on step {step}")
