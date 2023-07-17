@@ -17,20 +17,6 @@ from train_with_stylegan.utils import (
 from train_with_stylegan.loss import LPIPS
 
 
-def update_ema(current_params, ema_params_state_dict, rate=0.999):
-    """
-    Update target parameters to be closer to those of source parameters using
-    an exponential moving average.
-
-    :param target_params: the target parameter sequence.
-    :param source_params: the source parameter sequence.
-    :param rate: the EMA rate (closer to 1 means slower).
-    """
-    for param_name, param_value in current_params:
-        ema_param = ema_params_state_dict[param_name]
-        param_value.detach().mul_(rate).add_(ema_param, alpha=1 - rate)
-
-
 class DIffGANTrainer(nn.Module):
     def __init__(
         self, 
@@ -60,12 +46,9 @@ class DIffGANTrainer(nn.Module):
             b_min=self._params.beta_min,
             b_max=self._params.beta_max,
             n_steps=self._params.n_steps,
-            continious=self._params.sampling_countinious,
+            continuous=self._params.continuous,
             device=self._device
         )
-        
-        # self._lpips = LPIPS()
-        # self._lpips.to(self._device)
         
         self._opt_stu = optim.AdamW(student.parameters(), lr=self._params.lr_gen)
         self._timesteps = torch.from_numpy(np.arange(0, self._params.n_timesteps))
@@ -156,7 +139,7 @@ class DIffGANTrainer(nn.Module):
 
                 self._opt_stu.zero_grad()
                 loss = mse_loss + self._params.boundary_coeff * boundary_loss
-                assert not loss.isnan(), "Loss is nan"
+                assert not loss.isnan(), "Loss is NaN"
                 
                 loss.backward()
                 self._opt_stu.step()
@@ -184,22 +167,34 @@ class DIffGANTrainer(nn.Module):
             t:              torch.Tensor,
             x_t:            torch.Tensor,
     ):
-        t_tilda = torch.maximum(t / self._params.n_timesteps, torch.tensor(1e-4))
-        t_prev_tilda = torch.maximum((t - 1) / self._params.n_timesteps, torch.tensor(1e-4))
+        """
+        Эта часть кода код конца не отдебажена
+        """
+        # ! This rounding may be a cause of the problem
+        t_tilda = torch.maximum(t / self._params.n_timesteps, torch.tensor(1e-6))
+        t_prev_tilda = torch.maximum((t - 1) / self._params.n_timesteps, torch.tensor(1e-6))
 
         alpha_t, sigma_t = self._diffusion_scheduler.get_schedule(t_tilda)
         alpha_prev, sigma_prev = self._diffusion_scheduler.get_schedule(t_prev_tilda)
+        if (t_prev_tilda == t_tilda).all():
+            alpha_prev = torch.ones_like(sigma_prev, device=sigma_prev.device)
+            sigma_prev = torch.zeros_like(sigma_prev, device=sigma_prev.device)
+
         pred_original_sample = (x_t - sigma_t * model_input) / alpha_t
         pred_original_sample.clamp_(-1, 1)
 
-        pred_original_sample_coeff = (alpha_prev / sigma_t**2) * (1 - alpha_t / alpha_prev)
-        current_sample_coeff = torch.sqrt(alpha_t / alpha_prev) * (sigma_prev**2 / sigma_t**2)
+        pred_original_sample_coeff = (alpha_prev / sigma_t ** 2) * (1 - alpha_t ** 2 / alpha_prev ** 2)
+        current_sample_coeff = torch.sqrt(alpha_t / alpha_prev) * (sigma_prev ** 2 / sigma_t ** 2)
         pred_prev_sample = pred_original_sample_coeff * pred_original_sample + current_sample_coeff * x_t
 
-        curr_std = sigma_t / sigma_prev
+        curr_std = 1 - alpha_t ** 2 / alpha_prev ** 2
         return pred_prev_sample + curr_std * torch.randn_like(pred_prev_sample, device=self._device)
 
+    @torch.no_grad()
     def sample_with_teacher(self, n_images: int = 20):
+        """
+        Эта часть кода код конца не отдебажена
+        """
 
         images = torch.randn(
             n_images,
@@ -208,8 +203,9 @@ class DIffGANTrainer(nn.Module):
             self._params.resolution
         )
         images = images.to(self._device)
-
-        for t in tqdm(self._timesteps[::-1], desc="Sampling images with teacher...", leave=False):
+        # with torch.no_grad():
+        for t in tqdm(self._timesteps.numpy()[::-1], desc="Sampling images with teacher...", leave=False):
+            t = torch.ones(n_images) * t
             model_output = self._teacher(images, t).sample
             images = self.get_teacher_step(model_output, t, images)
 
@@ -248,20 +244,20 @@ class DIffGANTrainer(nn.Module):
             self._run.log(losses)
 
     @staticmethod
-    def _log_images(images, message: str = ""):
+    def _log_images(images, prefix: str, message: str = ""):
         grid = make_grid(images, nrow=10).permute(1, 2, 0)
         grid = grid.data.numpy().astype(np.uint8)
-        wandb.log({"sampled images": wandb.Image(grid, caption=message)})
+        wandb.log({f"{prefix}/Images": wandb.Image(grid, caption=message)})
 
-    def _generate_student_images_to_log(self, step: int, n_images=20):
+    def _generate_student_images_to_log(self, step: int, prefix: str = "student", n_images=20):
         with torch.no_grad():
             z = torch.randn(n_images, 3, self._params.resolution, self._params.resolution)
             time = torch.zeros(n_images, device=self._device)
             images = self._student(z.to(self._device), time).sample
-            
-            images = images.cpu() / 2.0 + 0.5
-            self._log_images(images=images, message=f"Student images on step {step}")
 
-    def _generate_teacher_images_to_log(self, step, n_images=20):
+            images = images.cpu() / 2.0 + 0.5
+            self._log_images(images=images, message=f"Student images on step {step}", prefix=prefix)
+
+    def _generate_teacher_images_to_log(self, step: int, prefix: str = "teacher", n_images=20):
         images = self.sample_with_teacher(n_images=n_images)
-        self._log_images(images=images, message=f"Teacher images on step {step}")
+        self._log_images(images=images, message=f"Teacher images on step {step}", prefix=prefix)

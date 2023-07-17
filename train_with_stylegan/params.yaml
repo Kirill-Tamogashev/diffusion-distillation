@@ -1,7 +1,7 @@
 training:
     batch_size: 32
     n_timesteps: 1000
-    sampling_countinious: true 
+    continuous: true
     n_steps: 500000
     resolution: 32
     step_size: 0.1

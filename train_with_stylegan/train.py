@@ -48,9 +48,8 @@ def  configure_checkpoint_path(args) -> tp.Tuple[Path, Path]:
 
 
 def train(args):
+    params = load_params(args)
 
-    
-    
     device = torch.device(f"cuda:{args.device}") if torch.cuda.is_available else torch.device("cpu")
     teacher = configure_unet_model_from_pretrained(args.teacher)
     student = configure_unet_model_from_pretrained(args.teacher)
@@ -77,6 +76,6 @@ def train(args):
     ).run_training(args)
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     args = parse_args()
     train(args)

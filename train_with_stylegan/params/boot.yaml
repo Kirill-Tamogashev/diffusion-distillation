@@ -2,7 +2,7 @@ training:
     solver: heun
     batch_size: 96
     n_timesteps: 1000
-    sampling_countinious: true 
+    continuous: true
     n_steps: 500000
     resolution: 32
     step_size: 0.04
