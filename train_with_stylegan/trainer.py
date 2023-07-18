@@ -49,7 +49,7 @@ class DIffGANTrainer(nn.Module):
             device=self._device
         )
         
-        self._opt_stu = optim.AdamW(student.parameters(), lr=self._params.lr_gen)
+        self._opt_stu = optim.AdamW(student.parameters(), lr=self._params.lr)
 
     def _sample_t_and_s(self):
         t = torch.randint(0, self._params.n_timesteps, (self._params.batch_size, ))
@@ -110,10 +110,10 @@ class DIffGANTrainer(nn.Module):
         if self._use_wandb and self._rank == 0:
             wandb.watch(
                 self._student, log="gradients", 
-                log_freq=self._params.gen_log_freq
+                log_freq=self._params.grads_log_freq
             )
 
-        with tqdm(total=self._params.n_steps) as pbar:
+        with tqdm(total=self._params.n_iterations) as pbar:
             for step in range(1, self._params.n_steps):
                 
                 dims = (self._params.batch_size, 3, self._params.resolution, self._params.resolution)
@@ -144,7 +144,8 @@ class DIffGANTrainer(nn.Module):
                 loss_dict = {
                     "loss":     loss.item(),
                     "lpips":    mse_loss.item(),
-                    "boundary": boundary_loss.item()
+                    "boundary": boundary_loss.item(),
+                    "learning rate": self._opt_stu.param_groups[0]["lr"]
                 }
                 if self._rank == 0:
                     self._log_losses(loss_dict)
@@ -264,10 +265,10 @@ class DIffGANTrainer(nn.Module):
         else:
             self.train()
 
-    def _log_losses(self, losses: dict, stage: str = "train"):
+    def _log_data(self, data: dict, stage: str = "train"):
         if self._use_wandb:
-            losses = {f"{stage}/{key}": value for key, value in losses.items()}
-            self._run.log(losses)
+            log_dict = {f"{stage}/{key}": value for key, value in data.items()}
+            self._run.log(log_dict)
 
     @staticmethod
     def _log_images(images, prefix: str, message: str = ""):

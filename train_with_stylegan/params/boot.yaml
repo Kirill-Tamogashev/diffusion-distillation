@@ -3,12 +3,12 @@ training:
     batch_size: 96
     n_timesteps: 1000
     continuous: true
-    n_steps: 500000
+    n_iterations: 500000
     resolution: 32
     step_size: 0.04
-    lr_gen: 0.0005
+    lr: 0.0005
     boundary_coeff: 200
-    gen_log_freq: 1000
+    grads_log_freq: 1000
     image_log_freq: 1000
     save_ckpt_freq: 5000
     beta_max: 20.0
