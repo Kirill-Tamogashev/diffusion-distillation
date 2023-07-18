@@ -17,7 +17,7 @@ class Discriminator(nn.Module):
         img_features:       int = 3,
         lowest_resolution:  int = 4,
         time_features:      int = 64,
-        time_countinious:   bool = False,
+        time_continuous:   bool = False,
         n_timesteps:        int = 1000
     ) -> None:
         super().__init__()
@@ -35,7 +35,7 @@ class Discriminator(nn.Module):
                     out_features=features * 2, 
                     kernel_size=3,
                     time_features=time_features,
-                    time_countinious=time_countinious,
+                    time_continuous=time_continuous,
                     n_timesteps=n_timesteps
                 )
             )
@@ -64,7 +64,7 @@ class DBlock(nn.Module):
         stride:             int = 1,
         padding:            int = 1,
         time_features:      int = 64,
-        time_countinious:   bool = False,
+        time_continuous:   bool = False,
         n_timesteps:        int = 1000,
     ) -> None:
         super().__init__()
@@ -80,11 +80,11 @@ class DBlock(nn.Module):
         
         self._norm1 = SPADE(
             input_features=out_features, time_features=time_features, 
-            time_countinious=time_countinious, n_timesteps=n_timesteps
+            time_continuous=time_continuous, n_timesteps=n_timesteps
             )
         self._norm2 = SPADE(
             input_features=out_features, time_features=time_features,
-            time_countinious=time_countinious, n_timesteps=n_timesteps
+            time_continuous=time_continuous, n_timesteps=n_timesteps
             )
         
         self._skip = Conv2dLayer(
@@ -119,14 +119,14 @@ class SPADE(nn.Module):
         time_features:      int,
         eps:                float = 1e-5, 
         norm_layer_type:    str = "bn_2d",
-        time_countinious:   bool = False,
+        time_continuous:    bool = False,
         n_timesteps:        int = 1000,
     ):
         super(SPADE, self).__init__()
-        self._time_countinious = time_countinious
+        self._time_continuous = time_continuous
         self._time_features = time_features
         
-        if time_countinious:
+        if time_continuous:
             self._time_embedding = partial(time_map, n_features=time_features)
         else:
             self._time_embedding = nn.Parameter(
@@ -145,7 +145,7 @@ class SPADE(nn.Module):
         self.norm_layer = _get_norm_layer(norm_layer_type, layer_kwargs)
         
     def _embedd_time(self, t: torch.Tensor) -> torch.Tensor:
-        if self._time_countinious:
+        if self._time_continuous:
             embedding = self._time_embedding(t)
         else:
             embedding = self._time_embedding[t]
@@ -157,7 +157,8 @@ class SPADE(nn.Module):
         gamma = self.conv_weight(t_embedding)
         beta = self.conv_bias(t_embedding)
         return outputs * (gamma + 1.0) + beta
- 
+
+
 def _get_norm_layer(layer_type: str, layer_kwargs: dict):
     # match layer_type:
     if layer_type == "bn_2d":

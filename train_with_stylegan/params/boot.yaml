@@ -11,6 +11,7 @@ training:
     grads_log_freq: 1000
     image_log_freq: 1000
     save_ckpt_freq: 5000
+    wandb_save: 10000
     beta_max: 20.0
     beta_min: 0.1
 unet:

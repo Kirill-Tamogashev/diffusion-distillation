@@ -199,6 +199,9 @@ class DIffGANTrainer(nn.Module):
         }
         torch.save(ckpt_dict, self._log_dir / f"ckpt-step-{step}.pt")
 
+        # if step % self._params.wandb_save:
+            # wandb.save()
+
     def run_training(self, args):
         """Wraps wandb usage for training."""
         self._use_wandb = args.use_wandb
