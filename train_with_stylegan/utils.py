@@ -1,6 +1,4 @@
-from typing import Any
 from diffusers import UNet2DModel
-import numpy as np
 
 import torch
 
@@ -35,7 +33,7 @@ class EMA:
         self._ema_model.to(device)
         
     def _update_params(self):
-        for param_ema, param_model in zip(self._ema_model, self._model):
+        for param_ema, param_model in zip(self._ema_model.parameters(), self._model.parameters()):
             param_ema.mul_(self._beta).add_(param_model.data, alpha=1 - self._beta)
         
     def _update_buffers(self):
@@ -43,46 +41,53 @@ class EMA:
             buffer_ema.data = buffer_model.date
         
     def update(self):
-            self._update_params()
-            self._update_buffers()
+        self._update_params()
+        self._update_buffers()
 
     
 class DiffusionScheduler:
     def __init__(
         self, 
-        b_min:      float,
-        b_max:      float,
+        b_min:          float,
+        b_max:          float,
         device,
-        n_steps:    int = 1000, 
-        continuous: bool = False,
+        n_timesteps:    int = 1000,
+        continuous:     bool = False,
+        t_eps:          float = 1e-5,
     ):
         self._continuous = continuous
         self._device = device
 
-        def beta_fn(t: torch.Tensor) -> torch.Tensor:
-            return 0.5 * t**2 * (b_max - b_min) + b_min * t
-            
+        self.timesteps = torch.arange(0, n_timesteps, dtype=torch.int64)
+
         if continuous:
-            self._beta_fn = beta_fn
-        else:
-            betas = np.linspace(b_min, b_max, n_steps, dtype=np.float64)
-            self._alphas_cumprod = np.cumprod(1 - betas)
+            def beta_fn(t: torch.Tensor) -> torch.Tensor:
+                return 0.5 * t**2 * (b_max - b_min) + b_min * t
 
-    def _alpha_fn(self, t):
-        if self._continuous:
-            return torch.exp(-0.5 * self._beta_fn(t))
+            #  [0, 1] -> [t_eps, 1] to avoid collapsing in 0
+            timesteps = t_eps + (1.0 - t_eps) * self.timesteps / n_timesteps
+            self.alphas_cumprod = torch.exp(- beta_fn(timesteps))
         else:
-            return torch.from_numpy(np.sqrt(self._alphas_cumprod))[t]
+            betas = torch.linspace(b_min, b_max, n_timesteps, dtype=torch.float32)
+            self.alphas_cumprod = torch.cumprod(1.0 - betas, dim=0)
 
-    def _sigma_fn(self, t):
-        if self._continuous:
-            return torch.sqrt(1 - torch.exp(- self._beta_fn(t)))
-        else:
-            return torch.from_numpy(np.sqrt(1 - self._alphas_cumprod))[t]
+    def alpha(self, t):
+        #  Use mask to handle cases where t < 0, only for sampling
+        mask = (t >= 0).int()
+        alpha_positive_t = torch.sqrt(self.alphas_cumprod)[t * mask] * mask
+        alpha_negative_t = torch.ones_like(t, device=t.device) * (1 - mask)
+        return alpha_positive_t + alpha_negative_t
+
+    def sigma(self, t):
+        #  Use mask to handle cases where t < 0, only for sampling
+        mask = (t >= 0).int()
+        sigma_positive_t = torch.sqrt(1 - self.alphas_cumprod)[t * mask] * mask
+        sigma_negative_t = torch.zeros_like(t, device=t.device) * (1 - mask)
+        return sigma_positive_t + sigma_negative_t
             
     def get_schedule(self, t):
-        alpha = self._alpha_fn(t).reshape(-1, 1, 1, 1)
-        sigma = self._sigma_fn(t).reshape(-1, 1, 1, 1)
+        alpha = self.alpha(t).reshape(-1, 1, 1, 1)
+        sigma = self.sigma(t).reshape(-1, 1, 1, 1)
         return alpha.to(self._device), sigma.to(self._device)
 
 

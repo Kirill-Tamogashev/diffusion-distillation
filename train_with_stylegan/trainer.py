@@ -14,7 +14,6 @@ from tqdm import tqdm
 from train_with_stylegan.utils import (
     DiffusionScheduler
 )
-from train_with_stylegan.loss import LPIPS
 
 
 class DIffGANTrainer(nn.Module):
@@ -42,16 +41,15 @@ class DIffGANTrainer(nn.Module):
         self._params = params.training
         assert self._params.solver in {"heun", "euler"}, "Solver is not known"
         
-        self._diffusion_scheduler = DiffusionScheduler(
+        self.scheduler = DiffusionScheduler(
             b_min=self._params.beta_min,
             b_max=self._params.beta_max,
-            n_steps=self._params.n_steps,
+            n_timesteps=self._params.n_timesteps,
             continuous=self._params.continuous,
             device=self._device
         )
         
         self._opt_stu = optim.AdamW(student.parameters(), lr=self._params.lr_gen)
-        self._timesteps = torch.from_numpy(np.arange(0, self._params.n_timesteps))
 
     def _sample_t_and_s(self):
         t = torch.randint(0, self._params.n_timesteps, (self._params.batch_size, ))
@@ -66,8 +64,8 @@ class DIffGANTrainer(nn.Module):
         x_t = alpha_t * y_t + sigma_t * z_t
         y(s)_target = SG[y(t) + lambda * delta * (f_teacher(x_t, t) - y(t))]
         """
-        alpha_t, sigma_t = self._diffusion_scheduler.get_schedule(t / self._params.n_timesteps)
-        alpha_s, sigma_s = self._diffusion_scheduler.get_schedule(s / self._params.n_timesteps)
+        alpha_t, sigma_t = self.scheduler.get_schedule(t)
+        alpha_s, sigma_s = self.scheduler.get_schedule(s)
         lambda_prime = alpha_s / alpha_t - sigma_s / sigma_t
         
         with torch.no_grad():
@@ -77,16 +75,16 @@ class DIffGANTrainer(nn.Module):
             x_t = alpha_t * y_t + sigma_t * z
             eps_t = self._teacher(x_t.float(), t).sample
             f_t = (x_t - sigma_t * eps_t) / alpha_t
-            
+
             y_target = y_t + lambda_prime * (f_t - y_t)
-        return y_target.detach().float(), lambda_prime
+        return y_target.detach().float()
 
     def _compute_target_heun(self, z, t, s, eps=1e-10) -> Tuple[torch.Tensor, torch.Tensor]:
         
-        t_tilda = torch.maximum(t / self._params.n_timesteps, torch.tensor(1e-4))
-        s_tilda = torch.maximum(s / self._params.n_timesteps, torch.tensor(1e-4))
-        alpha_t, sigma_t = self._diffusion_scheduler.get_schedule(t_tilda)
-        alpha_s, sigma_s = self._diffusion_scheduler.get_schedule(s_tilda)
+        # t_tilda = torch.maximum(t / self._params.n_timesteps, torch.tensor(1e-4))
+        # s_tilda = torch.maximum(s / self._params.n_timesteps, torch.tensor(1e-4))
+        alpha_t, sigma_t = self.scheduler.get_schedule(t)
+        alpha_s, sigma_s = self.scheduler.get_schedule(s)
         lambda_prime = alpha_s / (alpha_t + eps) - sigma_s / (sigma_t + eps)
 
         with torch.no_grad():
@@ -105,7 +103,7 @@ class DIffGANTrainer(nn.Module):
             
             y_target = y_t + 0.5 * ((f_t - y_t) + (f_s - y_s))
 
-        return y_target.detach().float(), lambda_prime
+        return y_target.detach().float()
     
     def train(self, *args):
 
@@ -125,9 +123,9 @@ class DIffGANTrainer(nn.Module):
                 
                 # compute target for s and t_max
                 if self._params.solver == "euler":
-                    y_s_hat, _ = self._compute_target_euler(z, t, s)
+                    y_s_hat = self._compute_target_euler(z, t, s)
                 elif self._params.solver == "heun":
-                    y_s_hat, _ = self._compute_target_heun(z, t, s)
+                    y_s_hat = self._compute_target_heun(z, t, s)
                 y_t_max_hat = self._teacher(z, t_max).sample
                 
                 # compute predictions for s and t_max
@@ -148,7 +146,6 @@ class DIffGANTrainer(nn.Module):
                     "lpips": mse_loss.item(),
                     "boundary": boundary_loss.item()
                 }
-                # pbar.set_postfix(loss_dict)
                 if self._rank == 0:
                     self._log_losses(loss_dict)
 
@@ -161,40 +158,74 @@ class DIffGANTrainer(nn.Module):
                 
                 pbar.update()
 
-    def get_teacher_step(
+    def _get_teacher_step_continuous(
             self,
-            model_input:    torch.Tensor,
-            t:              torch.Tensor,
-            x_t:            torch.Tensor,
+            x_0:    torch.Tensor,
+            x_t:    torch.Tensor,
+            t:      torch.Tensor,
     ):
         """
         Эта часть кода код конца не отдебажена
         """
         # ! This rounding may be a cause of the problem
-        t_tilda = torch.maximum(t / self._params.n_timesteps, torch.tensor(1e-6))
-        t_prev_tilda = torch.maximum((t - 1) / self._params.n_timesteps, torch.tensor(1e-6))
 
-        alpha_t, sigma_t = self._diffusion_scheduler.get_schedule(t_tilda)
-        alpha_prev, sigma_prev = self._diffusion_scheduler.get_schedule(t_prev_tilda)
-        if (t_prev_tilda == t_tilda).all():
-            alpha_prev = torch.ones_like(sigma_prev, device=sigma_prev.device)
-            sigma_prev = torch.zeros_like(sigma_prev, device=sigma_prev.device)
+        alpha_t, sigma_t = self.scheduler.get_schedule(t)
+        alpha_prev, sigma_prev = self.scheduler.get_schedule(t - 1)
+        beta_current = 1 - (alpha_t / alpha_prev) ** 2
 
-        pred_original_sample = (x_t - sigma_t * model_input) / alpha_t
+        pred_original_sample = (x_t - sigma_t * x_0) / alpha_t
         pred_original_sample.clamp_(-1, 1)
 
-        pred_original_sample_coeff = (alpha_prev / sigma_t ** 2) * (1 - alpha_t ** 2 / alpha_prev ** 2)
-        current_sample_coeff = torch.sqrt(alpha_t / alpha_prev) * (sigma_prev ** 2 / sigma_t ** 2)
+        pred_original_sample_coeff = (alpha_prev / (sigma_t + 1e-9) ** 2) * beta_current
+        current_sample_coeff = torch.sqrt(alpha_t / alpha_prev) * ((sigma_prev / (sigma_t + 1e-9)) ** 2)
         pred_prev_sample = pred_original_sample_coeff * pred_original_sample + current_sample_coeff * x_t
 
-        curr_std = 1 - alpha_t ** 2 / alpha_prev ** 2
-        return pred_prev_sample + curr_std * torch.randn_like(pred_prev_sample, device=self._device)
+        if t[0] % 100 == 0:
+            print(pred_original_sample_coeff[0], current_sample_coeff[0], beta_current[0])
+        noise = (beta_current ** 0.5) * torch.randn_like(pred_prev_sample, device=self._device)
+        return (pred_prev_sample + noise).float()
+
+    def _get_teacher_step_discrete(
+            self,
+            x_0:    torch.Tensor,
+            x_t:    torch.Tensor,
+            t:      torch.Tensor,
+    ):
+        """
+        The code borrowed from Diffusers Library DDPMScheduler;
+        url: https://github.com/huggingface/diffusers/blob/5e80827369272f4b24af51573466aba24454b068/src/diffusers/schedulers/scheduling_ddpm.py#L394
+        """
+        prev_t = t - 1
+        alpha_prod_t = self.scheduler.alphas_cumprod[t].reshape(-1, 1, 1, 1)
+        alpha_prod_t_prev = self.scheduler.alphas_cumprod[prev_t].reshape(-1, 1, 1, 1) if prev_t[0] >= 0 \
+            else torch.ones_like(prev_t).reshape(-1, 1, 1, 1)
+        beta_prod_t = 1 - alpha_prod_t
+        beta_prod_t_prev = 1 - alpha_prod_t_prev
+        current_alpha_t = alpha_prod_t / alpha_prod_t_prev
+        current_beta_t = 1 - current_alpha_t
+
+        pred_original_sample = (x_t - beta_prod_t ** 0.5 * x_0) / alpha_prod_t ** 0.5
+        pred_original_sample = pred_original_sample.clamp(-1.0, 1.0)
+
+        pred_original_sample_coeff = (alpha_prod_t_prev ** 0.5 * current_beta_t) / beta_prod_t
+        current_sample_coeff = current_alpha_t ** 0.5 * beta_prod_t_prev / beta_prod_t
+
+        pred_prev_sample = pred_original_sample_coeff * pred_original_sample + current_sample_coeff * x_t
+        variance = 1 - alpha_prod_t / alpha_prod_t_prev
+        if t[0] % 100 == 0:
+            print(pred_original_sample_coeff[0], current_sample_coeff[0], variance[0])
+        noise = (variance ** 0.5) * torch.randn_like(pred_prev_sample,
+                                                     dtype=pred_prev_sample.dtype,
+                                                     device=pred_prev_sample.device)
+        return (pred_prev_sample + noise).float()
 
     @torch.no_grad()
     def sample_with_teacher(self, n_images: int = 20):
         """
         Эта часть кода код конца не отдебажена
         """
+        step_fn = self._get_teacher_step_continuous if self._params.continuous \
+            else self._get_teacher_step_discrete
 
         images = torch.randn(
             n_images,
@@ -203,11 +234,10 @@ class DIffGANTrainer(nn.Module):
             self._params.resolution
         )
         images = images.to(self._device)
-        # with torch.no_grad():
-        for t in tqdm(self._timesteps.numpy()[::-1], desc="Sampling images with teacher...", leave=False):
-            t = torch.ones(n_images) * t
+        for t in tqdm(self.scheduler.timesteps.flip((0,)), desc="Sampling images with teacher...", leave=False):
+            t = torch.ones(n_images, dtype=torch.int) * t
             model_output = self._teacher(images, t).sample
-            images = self.get_teacher_step(model_output, t, images)
+            images = step_fn(x_0=model_output, x_t=images, t=t)
 
         images = images.cpu() / 2.0 + 0.5
         return images
