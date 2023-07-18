@@ -145,7 +145,7 @@ class DIffGANTrainer(nn.Module):
                     "loss":     loss.item(),
                     "mse":      mse_loss.item(),
                     "boundary": boundary_loss.item(),
-                    "lr":       self._opt_stu.param_groups[0]["lr"]
+                    "lr":       self._opt_stu.param_groups[-1]["lr"]  # noqa
                 }
                 if self._rank == 0:
                     self._log_data(loss_dict)
