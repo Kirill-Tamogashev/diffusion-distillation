@@ -73,14 +73,16 @@ class DiffusionScheduler:
     def alpha(self, t):
         #  Use mask to handle cases where t < 0, only for sampling
         mask = (t >= 0).int().to(self._device)
-        alpha_positive_t = torch.sqrt(self.alphas_cumprod)[t * mask] * mask
+        masked_t = (t * mask).long()
+        alpha_positive_t = torch.sqrt(self.alphas_cumprod)[masked_t] * mask
         alpha_negative_t = torch.ones_like(t, device=t.device) * (1 - mask)
         return alpha_positive_t + alpha_negative_t
 
     def sigma(self, t):
         #  Use mask to handle cases where t < 0, only for sampling
         mask = (t >= 0).int()
-        sigma_positive_t = torch.sqrt(1 - self.alphas_cumprod)[t * mask] * mask
+        masked_t = (t * mask).long()
+        sigma_positive_t = torch.sqrt(1 - self.alphas_cumprod)[masked_t] * mask
         sigma_negative_t = torch.zeros_like(t, device=t.device) * (1 - mask)
         return sigma_positive_t + sigma_negative_t
             

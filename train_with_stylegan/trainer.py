@@ -131,11 +131,11 @@ class DIffGANTrainer(nn.Module):
                 y_s = self._student(z, s).sample
                 y_t_max = self._student(z, t_max).sample
 
-                mse_loss = F.mse_loss(y_s, y_s_hat, reduction="mean") / (self._params.step_size ** 2)
+                mse_loss = F.mse_loss(y_s, y_s_hat, reduction="mean")
                 boundary_loss = F.mse_loss(y_t_max, y_t_max_hat, reduction="mean")
 
                 self._opt_stu.zero_grad()
-                loss = mse_loss + self._params.boundary_coeff * boundary_loss
+                loss = mse_loss / (self._params.step_size ** 2) + self._params.boundary_coeff * boundary_loss
                 assert not loss.isnan(), "Loss is NaN"
                 
                 loss.backward()
@@ -143,12 +143,12 @@ class DIffGANTrainer(nn.Module):
 
                 loss_dict = {
                     "loss":     loss.item(),
-                    "lpips":    mse_loss.item(),
+                    "mse":      mse_loss.item(),
                     "boundary": boundary_loss.item(),
                     "lr":       self._opt_stu.param_groups[0]["lr"]
                 }
                 if self._rank == 0:
-                    self._log_losses(loss_dict)
+                    self._log_data(loss_dict)
 
                 if step % self._params.image_log_freq == 0 and self._rank == 0:
                     self._generate_student_images_to_log(step)

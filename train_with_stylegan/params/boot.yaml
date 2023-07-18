@@ -6,7 +6,7 @@ training:
     n_iterations: 500000
     resolution: 32
     step_size: 0.04
-    lr: 0.0005
+    lr: 0.0001
     boundary_coeff: 200
     grads_log_freq: 1000
     image_log_freq: 1000
