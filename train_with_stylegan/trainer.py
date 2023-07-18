@@ -113,7 +113,7 @@ class DIffGANTrainer(nn.Module):
             )
 
         with tqdm(total=self._params.n_iterations) as pbar:
-            for step in range(1, self._params.n_steps):
+            for step in range(1, self._params.n_iterations):
                 
                 dims = (self._params.batch_size, 3, self._params.resolution, self._params.resolution)
                 z = torch.randn(dims, device=self._device)
@@ -145,7 +145,7 @@ class DIffGANTrainer(nn.Module):
                     "loss":     loss.item(),
                     "lpips":    mse_loss.item(),
                     "boundary": boundary_loss.item(),
-                    "learning rate": self._opt_stu.param_groups[0]["lr"]
+                    "lr":       self._opt_stu.param_groups[0]["lr"]
                 }
                 if self._rank == 0:
                     self._log_losses(loss_dict)
@@ -189,7 +189,7 @@ class DIffGANTrainer(nn.Module):
         """
         images = torch.randn(n_images, 3, self._params.resolution, self._params.resolution, device=self._device)
         for t in tqdm(self.scheduler.timesteps.flip((0,)), desc="Sampling images with teacher...", leave=False):
-            t = torch.ones(n_images, dtype=torch.int) * t
+            t = torch.ones(n_images, dtype=torch.int, device=self._device) * t
             model_output = self._teacher(images, t).sample
             images = self._get_teacher_step(x_0=model_output, x_t=images, t=t)
 

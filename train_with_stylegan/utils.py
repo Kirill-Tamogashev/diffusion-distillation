@@ -1,8 +1,7 @@
-from diffusers import UNet2DModel
-
 import torch
 
 import copy
+from diffusers import UNet2DModel
 
 
 class EMA:
@@ -66,14 +65,14 @@ class DiffusionScheduler:
 
             #  [0, 1] -> [t_eps, 1] to avoid collapsing in 0
             timesteps = t_eps + (1.0 - t_eps) * self.timesteps / n_timesteps
-            self.alphas_cumprod = torch.exp(- beta_fn(timesteps))
+            self.alphas_cumprod = torch.exp(- beta_fn(timesteps)).to(device)
         else:
             betas = torch.linspace(b_min, b_max, n_timesteps, dtype=torch.float32)
-            self.alphas_cumprod = torch.cumprod(1.0 - betas, dim=0)
+            self.alphas_cumprod = torch.cumprod(1.0 - betas, dim=0).to(device)
 
     def alpha(self, t):
         #  Use mask to handle cases where t < 0, only for sampling
-        mask = (t >= 0).int()
+        mask = (t >= 0).int().to(self._device)
         alpha_positive_t = torch.sqrt(self.alphas_cumprod)[t * mask] * mask
         alpha_negative_t = torch.ones_like(t, device=t.device) * (1 - mask)
         return alpha_positive_t + alpha_negative_t
