@@ -80,8 +80,6 @@ class DIffGANTrainer(nn.Module):
 
     def _compute_target_heun(self, z, t, s, eps=1e-10) -> Tuple[torch.Tensor, torch.Tensor]:
 
-        # t_tilda = torch.maximum(t / self._params.n_timesteps, torch.tensor(1e-4))
-        # s_tilda = torch.maximum(s / self._params.n_timesteps, torch.tensor(1e-4))
         alpha_t, sigma_t = self.scheduler.get_schedule(t)
         alpha_s, sigma_s = self.scheduler.get_schedule(s)
         lambda_prime = alpha_s / (alpha_t + eps) - sigma_s / (sigma_t + eps)
@@ -170,7 +168,7 @@ class DIffGANTrainer(nn.Module):
         current_alpha_t = alpha_t.pow(2) / alpha_prev.pow(2)
 
         pred_original_sample = (x_t - sigma_t * x_0) / alpha_t
-        pred_original_sample = pred_original_sample.clamp(-1.0, 1.0)
+        pred_original_sample.clamp_(-1.0, 1.0)
 
         pred_original_sample_coeff = alpha_prev * (1 - current_alpha_t) / sigma_t.pow(2)
         current_sample_coeff = current_alpha_t.sqrt() * (1 - alpha_prev.pow(2)) / sigma_t.pow(2)
@@ -184,9 +182,6 @@ class DIffGANTrainer(nn.Module):
 
     @torch.no_grad()
     def sample_with_teacher(self, n_images: int = 20):
-        """
-        Эта часть кода код конца не отдебажена
-        """
         images = torch.randn(n_images, 3, self._params.resolution, self._params.resolution, device=self._device)
         for t in tqdm(self.scheduler.timesteps.flip((0,)), desc="Sampling images with teacher...", leave=False):
             t = torch.ones(n_images, dtype=torch.int, device=self._device) * t
