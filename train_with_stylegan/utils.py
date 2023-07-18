@@ -53,7 +53,7 @@ class DiffusionScheduler:
         device,
         n_timesteps:    int = 1000,
         continuous:     bool = False,
-        t_eps:          float = 1e-5,
+        t_eps:          float = 1e-4,
     ):
         self._continuous = continuous
         self._device = device

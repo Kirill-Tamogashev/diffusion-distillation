@@ -55,9 +55,8 @@ class DIffGANTrainer(nn.Module):
         t = torch.randint(0, self._params.n_timesteps, (self._params.batch_size, ))
         s = t - self._params.step_size * self._params.n_timesteps
         s = torch.maximum(s, torch.zeros(self._params.batch_size))
-            
         return t.to(self._device), s.to(self._device)
-    
+
     def _compute_target_euler(self, z, t, s):
         """
         y(t) = y_student_theta(eps, t)
@@ -141,6 +140,7 @@ class DIffGANTrainer(nn.Module):
                 
                 loss.backward()
                 self._opt_stu.step()
+
                 loss_dict = {
                     "loss":     loss.item(),
                     "lpips":    mse_loss.item(),
@@ -159,61 +159,24 @@ class DIffGANTrainer(nn.Module):
                 
                 pbar.update()
 
-    def _get_teacher_step_continuous(
+    def _get_teacher_step(
             self,
             x_0:    torch.Tensor,
             x_t:    torch.Tensor,
             t:      torch.Tensor,
     ):
-        """
-        Эта часть кода код конца не отдебажена
-        """
-        # ! This rounding may be a cause of the problem
-
         alpha_t, sigma_t = self.scheduler.get_schedule(t)
         alpha_prev, sigma_prev = self.scheduler.get_schedule(t - 1)
-        beta_current = 1 - (alpha_t / alpha_prev) ** 2
+        current_alpha_t = alpha_t.pow(2) / alpha_prev.pow(2)
 
         pred_original_sample = (x_t - sigma_t * x_0) / alpha_t
-        pred_original_sample.clamp_(-1, 1)
-
-        pred_original_sample_coeff = (alpha_prev / (sigma_t + 1e-9) ** 2) * beta_current
-        current_sample_coeff = torch.sqrt(alpha_t / alpha_prev) * ((sigma_prev / (sigma_t + 1e-9)) ** 2)
-        pred_prev_sample = pred_original_sample_coeff * pred_original_sample + current_sample_coeff * x_t
-
-        if t[0] % 100 == 0:
-            print(pred_original_sample_coeff[0], current_sample_coeff[0], beta_current[0])
-        noise = (beta_current ** 0.5) * torch.randn_like(pred_prev_sample, device=self._device)
-        return (pred_prev_sample + noise).float()
-
-    def _get_teacher_step_discrete(
-            self,
-            x_0:    torch.Tensor,
-            x_t:    torch.Tensor,
-            t:      torch.Tensor,
-    ):
-        """
-        The code borrowed from Diffusers Library DDPMScheduler;
-        """
-        prev_t = t - 1
-        alpha_prod_t = self.scheduler.alphas_cumprod[t].reshape(-1, 1, 1, 1)
-        alpha_prod_t_prev = self.scheduler.alphas_cumprod[prev_t].reshape(-1, 1, 1, 1) if prev_t[0] >= 0 \
-            else torch.ones_like(prev_t).reshape(-1, 1, 1, 1)
-        beta_prod_t = 1 - alpha_prod_t
-        beta_prod_t_prev = 1 - alpha_prod_t_prev
-        current_alpha_t = alpha_prod_t / alpha_prod_t_prev
-        current_beta_t = 1 - current_alpha_t
-
-        pred_original_sample = (x_t - beta_prod_t ** 0.5 * x_0) / alpha_prod_t ** 0.5
         pred_original_sample = pred_original_sample.clamp(-1.0, 1.0)
 
-        pred_original_sample_coeff = (alpha_prod_t_prev ** 0.5 * current_beta_t) / beta_prod_t
-        current_sample_coeff = current_alpha_t ** 0.5 * beta_prod_t_prev / beta_prod_t
+        pred_original_sample_coeff = alpha_prev * (1 - current_alpha_t) / sigma_t.pow(2)
+        current_sample_coeff = current_alpha_t.sqrt() * (1 - alpha_prev.pow(2)) / sigma_t.pow(2)
 
         pred_prev_sample = pred_original_sample_coeff * pred_original_sample + current_sample_coeff * x_t
-        variance = 1 - alpha_prod_t / alpha_prod_t_prev
-        if t[0] % 100 == 0:
-            print(pred_original_sample_coeff[0], current_sample_coeff[0], variance[0])
+        variance = 1 - current_alpha_t
         noise = (variance ** 0.5) * torch.randn_like(pred_prev_sample,
                                                      dtype=pred_prev_sample.dtype,
                                                      device=pred_prev_sample.device)
@@ -224,17 +187,11 @@ class DIffGANTrainer(nn.Module):
         """
         Эта часть кода код конца не отдебажена
         """
-        images = torch.randn(
-            n_images,
-            3,
-            self._params.resolution,
-            self._params.resolution
-        )
-        images = images.to(self._device)
+        images = torch.randn(n_images, 3, self._params.resolution, self._params.resolution, device=self._device)
         for t in tqdm(self.scheduler.timesteps.flip((0,)), desc="Sampling images with teacher...", leave=False):
             t = torch.ones(n_images, dtype=torch.int) * t
             model_output = self._teacher(images, t).sample
-            images = self._get_teacher_step_discrete(x_0=model_output, x_t=images, t=t)
+            images = self._get_teacher_step(x_0=model_output, x_t=images, t=t)
 
         images = images.cpu() / 2.0 + 0.5
         return images
