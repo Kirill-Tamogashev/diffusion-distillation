@@ -142,8 +142,8 @@ class DIffGANTrainer(nn.Module):
                 loss.backward()
                 self._opt_stu.step()
                 loss_dict = {
-                    "loss": loss.item(),
-                    "lpips": mse_loss.item(),
+                    "loss":     loss.item(),
+                    "lpips":    mse_loss.item(),
                     "boundary": boundary_loss.item()
                 }
                 if self._rank == 0:
@@ -193,7 +193,6 @@ class DIffGANTrainer(nn.Module):
     ):
         """
         The code borrowed from Diffusers Library DDPMScheduler;
-        url: https://github.com/huggingface/diffusers/blob/5e80827369272f4b24af51573466aba24454b068/src/diffusers/schedulers/scheduling_ddpm.py#L394
         """
         prev_t = t - 1
         alpha_prod_t = self.scheduler.alphas_cumprod[t].reshape(-1, 1, 1, 1)
@@ -224,9 +223,6 @@ class DIffGANTrainer(nn.Module):
         """
         Эта часть кода код конца не отдебажена
         """
-        step_fn = self._get_teacher_step_continuous if self._params.continuous \
-            else self._get_teacher_step_discrete
-
         images = torch.randn(
             n_images,
             3,
@@ -237,16 +233,16 @@ class DIffGANTrainer(nn.Module):
         for t in tqdm(self.scheduler.timesteps.flip((0,)), desc="Sampling images with teacher...", leave=False):
             t = torch.ones(n_images, dtype=torch.int) * t
             model_output = self._teacher(images, t).sample
-            images = step_fn(x_0=model_output, x_t=images, t=t)
+            images = self._get_teacher_step_discrete(x_0=model_output, x_t=images, t=t)
 
         images = images.cpu() / 2.0 + 0.5
         return images
 
     def _save_checkpoint(self, step):
         ckpt_dict = {
-            "student": self._student.state_dict(),
-            "student_opt": self._opt_stu.state_dict(),
-            "step": step
+            "student":      self._student.state_dict(),
+            "student_opt":  self._opt_stu.state_dict(),
+            "step":         step
         }
         torch.save(ckpt_dict, self._log_dir / f"ckpt-step-{step}.pt")
 
