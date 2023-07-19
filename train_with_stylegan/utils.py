@@ -65,10 +65,19 @@ class EMA:
         self._update_params()
         self._update_buffers()
 
-    
+
+def configure_unet_model_from_pretrained(model_config, device=None, train: Optional[bool] = None):
+    model = UNet2DModel.from_pretrained(model_config)
+    if device is not None:
+        model.to(device)
+    if train is not None:
+        model.train() if train else model.eval()
+    return model
+
+
 class DiffusionScheduler:
     def __init__(
-        self, 
+        self,
         b_min:          float,
         b_max:          float,
         device,
@@ -107,17 +116,8 @@ class DiffusionScheduler:
         sigma_positive_t = torch.sqrt(1 - self.alphas_cumprod)[masked_t] * mask
         sigma_negative_t = torch.zeros_like(t, device=t.device) * (1 - mask)
         return sigma_positive_t + sigma_negative_t
-            
+
     def get_schedule(self, t):
         alpha = self.alpha(t).reshape(-1, 1, 1, 1)
         sigma = self.sigma(t).reshape(-1, 1, 1, 1)
         return alpha.to(self._device), sigma.to(self._device)
-
-
-def configure_unet_model_from_pretrained(model_config, device=None, train: Optional[bool] = None):
-    model = UNet2DModel.from_pretrained(model_config)
-    if device is not None:
-        model.to(device)
-    if train is not None:
-        model.train() if train else model.eval()
-    return model

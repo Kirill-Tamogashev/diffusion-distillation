@@ -24,21 +24,24 @@ class DIffGANTrainer(nn.Module):
         params,
         device:     torch.device,
         log_dir:    Path,
-        t_delta:    float = 0.001,
         rank:       int = 0
     ) -> None:
         super().__init__()
 
-        self._rank = rank
-        self._log_dir = log_dir
         self._run = None  # Placeholder for wandb run
+        self._run_name = ""  # Placeholder for run name
         self._use_wandb = False
-        self._t_delta = t_delta
+
+        self._rank = rank
         self._device = device
+        self._log_dir = log_dir
 
         self._teacher = teacher
         self._student = student
+
         self._params = params.training
+        self._model_params = params.unet
+
         assert self._params.solver in {"heun", "euler"}, "Solver is not known"
 
         self.scheduler = DiffusionScheduler(
@@ -155,6 +158,9 @@ class DIffGANTrainer(nn.Module):
                 if step % self._params.save_ckpt_freq == 0 and self._rank == 0:
                     self._save_checkpoint(step)
 
+                if step % self._params.log_model_artifact_freq == 0 and self._rank == 0:
+                    self._log_model_artifact(step)
+
                 pbar.update()
 
     def _get_teacher_step(
@@ -199,12 +205,22 @@ class DIffGANTrainer(nn.Module):
         }
         torch.save(ckpt_dict, self._log_dir / f"ckpt-step-{step}.pt")
 
-        # if step % self._params.wandb_save:
-            # wandb.save()
+    def _log_model_artifact(self, step):
+        model_artifact = wandb.Artifact(
+            name=f"UNet-step-{step}.pt",
+            type="model",
+            description=f"Checkpoint of a student model at step {step}",
+            metadata=self._model_params
+        )
+        ckpt_path = Path(self._run_name) / f"ckpt-step-{step}.pt"
+        model_artifact.add_file(ckpt_path.as_posix())
+        wandb.save(ckpt_path)
+        self._run.log(model_artifact)
 
     def run_training(self, args):
         """Wraps wandb usage for training."""
         self._use_wandb = args.use_wandb
+        self._run_name = args.name
         if self._use_wandb and self._rank == 0:
             wandb_config = dict(
                 dir=args.dir,
