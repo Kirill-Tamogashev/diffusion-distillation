@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Union
 from pathlib import Path
 
 import torch
@@ -24,9 +24,9 @@ class DIffGANTrainer(nn.Module):
         teacher:    nn.Module,
         student:    nn.Module,
         params,
-        device:     torch.device,
+        device:     Union[torch.device, int],
         log_dir:    Path,
-        rank:       int = 0
+        ddp:        bool = False
     ) -> None:
         super().__init__()
 
@@ -34,7 +34,7 @@ class DIffGANTrainer(nn.Module):
         self._run_name = ""  # Placeholder for run name
         self._use_wandb = False
 
-        self._rank = rank
+        self._ddp = ddp
         self._device = device
         self._log_dir = log_dir
 
@@ -102,7 +102,7 @@ class DIffGANTrainer(nn.Module):
 
     def train(self, *args):
 
-        if self._use_wandb and self._rank == 0:
+        if self._use_wandb:
             wandb.watch(
                 self._student, log="gradients",
                 log_freq=self._params.grads_log_freq
@@ -143,17 +143,17 @@ class DIffGANTrainer(nn.Module):
                     "boundary": boundary_loss.item(),
                     "lr":       self._opt_stu.param_groups[-1]["lr"]  # noqa
                 }
-                if self._rank == 0:
+                if self._use_wandb:
                     self._log_data(loss_dict)
 
-                if step % self._params.image_log_freq == 0 and self._rank == 0:
+                if step % self._params.image_log_freq == 0 and self._use_wandb:
                     self._generate_student_images_to_log(step)
                     self._generate_teacher_images_to_log(step)
 
-                if step % self._params.save_ckpt_freq == 0 and self._rank == 0:
+                if step % self._params.save_ckpt_freq == 0 and self._use_wandb:
                     self._save_checkpoint(step)
 
-                if step % self._params.log_model_artifact_freq == 0 and self._rank == 0:
+                if step % self._params.log_model_artifact_freq == 0 and self._use_wandb:
                     self._log_model_artifact(step)
 
                 pbar.update()
@@ -194,7 +194,7 @@ class DIffGANTrainer(nn.Module):
 
     def _save_checkpoint(self, step):
         ckpt_dict = {
-            "student":      self._student.state_dict(),
+            "student":      self._student.module.state_dict() if self._ddp else self._student.state_dict(),
             "student_opt":  self._opt_stu.state_dict(),
             "step":         step
         }
@@ -214,9 +214,13 @@ class DIffGANTrainer(nn.Module):
 
     def run_training(self, args):
         """Wraps wandb usage for training."""
-        self._use_wandb = args.use_wandb
         self._run_name = args.name
-        if self._use_wandb and self._rank == 0:
+        self._use_wandb = args.use_wandb
+
+        if self._ddp:
+            self._use_wandb = args.use_wandb and self._device == 0
+
+        if self._use_wandb:
             wandb_config = dict(
                 dir=args.dir,
                 config=self._params,

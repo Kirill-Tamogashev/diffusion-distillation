@@ -61,7 +61,7 @@ def run_distributed(rank, world_size, params, args, log_dir):
         params=params,
         device=rank,
         log_dir=log_dir,
-        rank=rank
+        ddp=True
     ).run_training(args)
     
     cleanup()
