@@ -131,7 +131,7 @@ class DIffGANTrainer(nn.Module):
                 boundary_loss = F.mse_loss(y_t_max, y_t_max_hat, reduction="mean")
 
                 self._opt_stu.zero_grad()
-                loss = mse_loss / (self._params.step_size ** 2) + self._params.boundary_coeff * boundary_loss
+                loss = mse_loss / self._params.step_size.pow(2) + self._params.boundary_coeff * boundary_loss
                 assert not loss.isnan(), "Loss is NaN"
 
                 loss.backward()
@@ -141,7 +141,6 @@ class DIffGANTrainer(nn.Module):
                     "loss":     loss.item(),
                     "mse":      mse_loss.item(),
                     "boundary": boundary_loss.item(),
-                    "lr":       self._opt_stu.param_groups[-1]["lr"]  # noqa
                 }
                 if self._use_wandb:
                     self._log_data(loss_dict)
