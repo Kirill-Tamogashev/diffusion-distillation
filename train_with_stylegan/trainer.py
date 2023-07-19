@@ -62,6 +62,11 @@ class DIffGANTrainer(nn.Module):
         s = torch.maximum(s, torch.zeros(self._params.batch_size))
         return t.to(self._device), s.to(self._device)
 
+    def _predict_x_0(self, y, z, t, alpha, sigma):
+        x_t = alpha * y + sigma * z
+        eps_t = self._teacher(x_t.float(), t).sample
+        return (x_t - sigma * eps_t) / alpha
+
     def _compute_target_euler(self, z, t, s):
         """
         y(t) = y_student_theta(eps, t)
@@ -73,14 +78,10 @@ class DIffGANTrainer(nn.Module):
         lambda_prime = alpha_s / alpha_t - sigma_s / sigma_t
 
         with torch.no_grad():
-
             y_t = self._student(z, t).sample
-
-            x_t = alpha_t * y_t + sigma_t * z
-            eps_t = self._teacher(x_t.float(), t).sample
-            f_t = (x_t - sigma_t * eps_t) / alpha_t
-
+            f_t = self._predict_x_0(y_t, z, t, alpha_t, sigma_t)
             y_target = y_t + lambda_prime * (f_t - y_t)
+
         return y_target.detach().float()
 
     def _compute_target_heun(self, z, t, s, eps=1e-10) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -90,20 +91,12 @@ class DIffGANTrainer(nn.Module):
         lambda_prime = alpha_s / (alpha_t + eps) - sigma_s / (sigma_t + eps)
 
         with torch.no_grad():
-
             y_t = self._student(z, t).sample
-
-            x_t = alpha_t * y_t + sigma_t * z
-            eps_t = self._teacher(x_t.float(), t).sample
-            f_t = (x_t - sigma_t * eps_t) / alpha_t
-
+            f_t = self._predict_x_0(y_t, z, t, alpha_t, sigma_t)
             y_s = y_t + lambda_prime * (f_t - y_t)
 
-            x_s = alpha_s * y_s + sigma_s * z
-            eps_s = self._teacher(x_s.float(), s).sample
-            f_s = (x_s - sigma_s * eps_s) / alpha_s
-
-            y_target = y_t + 0.5 * ((f_t - y_t) + (f_s - y_s))
+            f_s = self._predict_x_0(y_s, z, s, alpha_s, sigma_s)
+            y_target = y_t + 0.5 * lambda_prime * ((f_t - y_t) + (f_s - y_s))
 
         return y_target.detach().float()
 
@@ -183,9 +176,9 @@ class DIffGANTrainer(nn.Module):
 
         pred_prev_sample = pred_original_sample_coeff * pred_original_sample + current_sample_coeff * x_t
         variance = 1 - current_alpha_t
-        noise = (variance ** 0.5) * torch.randn_like(pred_prev_sample,
-                                                     dtype=pred_prev_sample.dtype,
-                                                     device=pred_prev_sample.device)
+        noise = variance.sqrt() * torch.randn_like(pred_prev_sample,
+                                                   dtype=pred_prev_sample.dtype,
+                                                   device=pred_prev_sample.device)
         return (pred_prev_sample + noise).float()
 
     @torch.no_grad()
