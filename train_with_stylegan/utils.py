@@ -1,7 +1,29 @@
+from typing import Optional, Tuple
+
 import torch
 
 import copy
+import yaml
+from pathlib import Path
 from diffusers import UNet2DModel
+from ml_collections import ConfigDict
+
+
+def load_params(args):
+    with args.params.open("r") as f:
+        config = yaml.safe_load(f)
+    return ConfigDict(config)
+
+
+def configure_checkpoint_path(args) -> Tuple[Path, Optional[Path]]:
+    log_dir = args.dir / args.name
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    existing_ckpts = log_dir.glob("*.pt")
+    if next(existing_ckpts, None) is None:
+        return log_dir, None
+    last_ckpt = max(existing_ckpts, key=lambda x: x.stat().st_ctime)
+    return log_dir, last_ckpt
 
 
 class EMA:
@@ -43,10 +65,19 @@ class EMA:
         self._update_params()
         self._update_buffers()
 
-    
+
+def configure_unet_model_from_pretrained(model_config, device=None, train: Optional[bool] = None):
+    model = UNet2DModel.from_pretrained(model_config)
+    if device is not None:
+        model.to(device)
+    if train is not None:
+        model.train() if train else model.eval()
+    return model
+
+
 class DiffusionScheduler:
     def __init__(
-        self, 
+        self,
         b_min:          float,
         b_max:          float,
         device,
@@ -85,12 +116,8 @@ class DiffusionScheduler:
         sigma_positive_t = torch.sqrt(1 - self.alphas_cumprod)[masked_t] * mask
         sigma_negative_t = torch.zeros_like(t, device=t.device) * (1 - mask)
         return sigma_positive_t + sigma_negative_t
-            
+
     def get_schedule(self, t):
         alpha = self.alpha(t).reshape(-1, 1, 1, 1)
         sigma = self.sigma(t).reshape(-1, 1, 1, 1)
         return alpha.to(self._device), sigma.to(self._device)
-
-
-def configure_unet_model_from_pretrained(model_config):
-    return UNet2DModel.from_pretrained(model_config)

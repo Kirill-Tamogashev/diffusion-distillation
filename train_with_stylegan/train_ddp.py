@@ -1,18 +1,18 @@
-import typing as tp
 from argparse import ArgumentParser
 from pathlib import Path
 import os
 
-import yaml
-from ml_collections import ConfigDict
-
 import torch
-from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.nn.parallel import DistributedDataParallel as DistributedDP
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from train_with_stylegan.trainer import DIffGANTrainer
-from train_with_stylegan.utils import configure_unet_model_from_pretrained
+from train_with_stylegan.utils import (
+    configure_unet_model_from_pretrained,
+    load_params,
+    configure_checkpoint_path
+)
 
 
 TEACHER_MODEL_OPTIONS = ["google/ddpm-cifar10-32"]
@@ -33,16 +33,6 @@ def parse_args():
 
     return parser.parse_args()
 
-def  configure_checkpoint_path(args) -> tp.Tuple[Path, Path]:
-    log_dir = args.dir / args.name
-    log_dir.mkdir(parents=True, exist_ok=True)
-    
-    existing_ckpts = log_dir.glob("*.pt")
-    if next(existing_ckpts, None) is None:
-        return log_dir, None
-    last_ckpt = max(existing_ckpts, key=lambda x: x.stat().st_ctime)
-    return log_dir, last_ckpt
-
 
 def setup(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
@@ -59,14 +49,10 @@ def run_distributed(rank, world_size, params, args, log_dir):
     setup(rank, world_size)
     
     with torch.no_grad():
-        teacher = configure_unet_model_from_pretrained(args.teacher)
-    teacher.to(rank)
-    
-    student = configure_unet_model_from_pretrained(args.teacher)
-    student.to(rank)
-    student = DDP(student, device_ids=[rank])
-    
-    teacher.eval()
+        teacher = configure_unet_model_from_pretrained(args.teacher, rank, False)
+
+    student = configure_unet_model_from_pretrained(args.teacher, rank)
+    student = DistributedDP(student, device_ids=[rank])
     student.train()
 
     DIffGANTrainer(
@@ -80,10 +66,6 @@ def run_distributed(rank, world_size, params, args, log_dir):
     
     cleanup()
 
-def load_params(args):
-    with args.params.open("r") as f:
-        config = yaml.safe_load(f)
-    return ConfigDict(config)
 
 def train(args):
     params = load_params(args)
@@ -98,7 +80,8 @@ def train(args):
              args=(args.world_size, params, args, log_dir),
              nprocs=args.world_size,
              join=True)
-    
-if __name__=="__main__":
-    args = parse_args()
-    train(args)
+
+
+if __name__ == "__main__":
+    args_dict = parse_args()
+    train(args_dict)

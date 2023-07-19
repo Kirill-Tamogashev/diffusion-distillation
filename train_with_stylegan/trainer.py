@@ -18,29 +18,32 @@ from train_with_stylegan.utils import (
 
 class DIffGANTrainer(nn.Module):
     def __init__(
-        self, 
-        teacher:    nn.Module, 
+        self,
+        teacher:    nn.Module,
         student:    nn.Module,
         params,
         device:     torch.device,
         log_dir:    Path,
-        t_delta:    float = 0.001,
         rank:       int = 0
     ) -> None:
         super().__init__()
-        
-        self._rank = rank
-        self._log_dir = log_dir
+
         self._run = None  # Placeholder for wandb run
+        self._run_name = ""  # Placeholder for run name
         self._use_wandb = False
-        self._t_delta = t_delta
+
+        self._rank = rank
         self._device = device
+        self._log_dir = log_dir
 
         self._teacher = teacher
         self._student = student
+
         self._params = params.training
+        self._model_params = params.unet
+
         assert self._params.solver in {"heun", "euler"}, "Solver is not known"
-        
+
         self.scheduler = DiffusionScheduler(
             b_min=self._params.beta_min,
             b_max=self._params.beta_max,
@@ -48,7 +51,7 @@ class DIffGANTrainer(nn.Module):
             continuous=self._params.continuous,
             device=self._device
         )
-        
+
         self._opt_stu = optim.AdamW(student.parameters(), lr=self._params.lr)
 
     def _sample_t_and_s(self):
@@ -66,11 +69,11 @@ class DIffGANTrainer(nn.Module):
         alpha_t, sigma_t = self.scheduler.get_schedule(t)
         alpha_s, sigma_s = self.scheduler.get_schedule(s)
         lambda_prime = alpha_s / alpha_t - sigma_s / sigma_t
-        
+
         with torch.no_grad():
 
             y_t = self._student(z, t).sample
-            
+
             x_t = alpha_t * y_t + sigma_t * z
             eps_t = self._teacher(x_t.float(), t).sample
             f_t = (x_t - sigma_t * eps_t) / alpha_t
@@ -79,9 +82,7 @@ class DIffGANTrainer(nn.Module):
         return y_target.detach().float()
 
     def _compute_target_heun(self, z, t, s, eps=1e-10) -> Tuple[torch.Tensor, torch.Tensor]:
-        
-        # t_tilda = torch.maximum(t / self._params.n_timesteps, torch.tensor(1e-4))
-        # s_tilda = torch.maximum(s / self._params.n_timesteps, torch.tensor(1e-4))
+
         alpha_t, sigma_t = self.scheduler.get_schedule(t)
         alpha_s, sigma_s = self.scheduler.get_schedule(s)
         lambda_prime = alpha_s / (alpha_t + eps) - sigma_s / (sigma_t + eps)
@@ -89,44 +90,44 @@ class DIffGANTrainer(nn.Module):
         with torch.no_grad():
 
             y_t = self._student(z, t).sample
-            
+
             x_t = alpha_t * y_t + sigma_t * z
             eps_t = self._teacher(x_t.float(), t).sample
             f_t = (x_t - sigma_t * eps_t) / alpha_t
-            
+
             y_s = y_t + lambda_prime * (f_t - y_t)
-            
+
             x_s = alpha_s * y_s + sigma_s * z
             eps_s = self._teacher(x_s.float(), s).sample
             f_s = (x_s - sigma_s * eps_s) / alpha_s
-            
+
             y_target = y_t + 0.5 * ((f_t - y_t) + (f_s - y_s))
 
         return y_target.detach().float()
-    
+
     def train(self, *args):
 
         if self._use_wandb and self._rank == 0:
             wandb.watch(
-                self._student, log="gradients", 
+                self._student, log="gradients",
                 log_freq=self._params.grads_log_freq
             )
 
         with tqdm(total=self._params.n_iterations) as pbar:
             for step in range(1, self._params.n_iterations):
-                
+
                 dims = (self._params.batch_size, 3, self._params.resolution, self._params.resolution)
                 z = torch.randn(dims, device=self._device)
                 t, s = self._sample_t_and_s()
                 t_max = torch.ones(self._params.batch_size, device=self._device) * (self._params.n_timesteps - 1)
-                
+
                 # compute target for s and t_max
                 if self._params.solver == "euler":
                     y_s_hat = self._compute_target_euler(z, t, s)
                 elif self._params.solver == "heun":
                     y_s_hat = self._compute_target_heun(z, t, s)
                 y_t_max_hat = self._teacher(z, t_max).sample
-                
+
                 # compute predictions for s and t_max
                 y_s = self._student(z, s).sample
                 y_t_max = self._student(z, t_max).sample
@@ -137,7 +138,7 @@ class DIffGANTrainer(nn.Module):
                 self._opt_stu.zero_grad()
                 loss = mse_loss / (self._params.step_size ** 2) + self._params.boundary_coeff * boundary_loss
                 assert not loss.isnan(), "Loss is NaN"
-                
+
                 loss.backward()
                 self._opt_stu.step()
 
@@ -145,7 +146,7 @@ class DIffGANTrainer(nn.Module):
                     "loss":     loss.item(),
                     "mse":      mse_loss.item(),
                     "boundary": boundary_loss.item(),
-                    "lr":       self._opt_stu.param_groups[0]["lr"]
+                    "lr":       self._opt_stu.param_groups[-1]["lr"]  # noqa
                 }
                 if self._rank == 0:
                     self._log_data(loss_dict)
@@ -153,10 +154,13 @@ class DIffGANTrainer(nn.Module):
                 if step % self._params.image_log_freq == 0 and self._rank == 0:
                     self._generate_student_images_to_log(step)
                     self._generate_teacher_images_to_log(step)
-                    
+
                 if step % self._params.save_ckpt_freq == 0 and self._rank == 0:
                     self._save_checkpoint(step)
-                
+
+                if step % self._params.log_model_artifact_freq == 0 and self._rank == 0:
+                    self._log_model_artifact(step)
+
                 pbar.update()
 
     def _get_teacher_step(
@@ -170,7 +174,7 @@ class DIffGANTrainer(nn.Module):
         current_alpha_t = alpha_t.pow(2) / alpha_prev.pow(2)
 
         pred_original_sample = (x_t - sigma_t * x_0) / alpha_t
-        pred_original_sample = pred_original_sample.clamp(-1.0, 1.0)
+        pred_original_sample.clamp_(-1.0, 1.0)
 
         pred_original_sample_coeff = alpha_prev * (1 - current_alpha_t) / sigma_t.pow(2)
         current_sample_coeff = current_alpha_t.sqrt() * (1 - alpha_prev.pow(2)) / sigma_t.pow(2)
@@ -184,9 +188,6 @@ class DIffGANTrainer(nn.Module):
 
     @torch.no_grad()
     def sample_with_teacher(self, n_images: int = 20):
-        """
-        Эта часть кода код конца не отдебажена
-        """
         images = torch.randn(n_images, 3, self._params.resolution, self._params.resolution, device=self._device)
         for t in tqdm(self.scheduler.timesteps.flip((0,)), desc="Sampling images with teacher...", leave=False):
             t = torch.ones(n_images, dtype=torch.int, device=self._device) * t
@@ -204,9 +205,22 @@ class DIffGANTrainer(nn.Module):
         }
         torch.save(ckpt_dict, self._log_dir / f"ckpt-step-{step}.pt")
 
+    def _log_model_artifact(self, step):
+        model_artifact = wandb.Artifact(
+            name=f"UNet-step-{step}.pt",
+            type="model",
+            description=f"Checkpoint of a student model at step {step}",
+            metadata=self._model_params
+        )
+        ckpt_path = Path(self._run_name) / f"ckpt-step-{step}.pt"
+        model_artifact.add_file(ckpt_path.as_posix())
+        wandb.save(ckpt_path)
+        self._run.log(model_artifact)
+
     def run_training(self, args):
         """Wraps wandb usage for training."""
         self._use_wandb = args.use_wandb
+        self._run_name = args.name
         if self._use_wandb and self._rank == 0:
             wandb_config = dict(
                 dir=args.dir,
@@ -230,17 +244,17 @@ class DIffGANTrainer(nn.Module):
     @staticmethod
     def _log_images(images, prefix: str, message: str = ""):
         grid = make_grid(images, nrow=10).permute(1, 2, 0)
-        grid = grid.data.numpy().astype(np.uint8)
+        grid = grid.data.mul(255).numpy().astype(np.uint8)
         wandb.log({f"{prefix}/Images": wandb.Image(grid, caption=message)})
 
+    @torch.no_grad()
     def _generate_student_images_to_log(self, step: int, prefix: str = "student", n_images=20):
-        with torch.no_grad():
-            z = torch.randn(n_images, 3, self._params.resolution, self._params.resolution)
-            time = torch.zeros(n_images, device=self._device)
-            images = self._student(z.to(self._device), time).sample
+        z = torch.randn(n_images, 3, self._params.resolution, self._params.resolution)
+        time = torch.zeros(n_images, device=self._device)
+        images = self._student(z.to(self._device), time).sample
 
-            images = images.cpu() / 2.0 + 0.5
-            self._log_images(images=images, message=f"Student images on step {step}", prefix=prefix)
+        images = images.cpu() / 2.0 + 0.5
+        self._log_images(images=images, message=f"Student images on step {step}", prefix=prefix)
 
     def _generate_teacher_images_to_log(self, step: int, prefix: str = "teacher", n_images=20):
         images = self.sample_with_teacher(n_images=n_images)
