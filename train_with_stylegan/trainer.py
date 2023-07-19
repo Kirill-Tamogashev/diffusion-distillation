@@ -153,8 +153,8 @@ class DIffGANTrainer(nn.Module):
                 if step % self._params.save_ckpt_freq == 0 and self._use_wandb:
                     self._save_checkpoint(step)
 
-                if step % self._params.log_model_artifact_freq == 0 and self._use_wandb:
-                    self._log_model_artifact(step)
+                    if step % self._params.log_model_artifact_freq == 0:
+                        self._log_model_artifact(step)
 
                 pbar.update()
 
@@ -205,12 +205,12 @@ class DIffGANTrainer(nn.Module):
             name=f"UNet-step-{step}.pt",
             type="model",
             description=f"Checkpoint of a student model at step {step}",
-            metadata=self._model_params
+            metadata=dict(self._model_params)
         )
-        ckpt_path = Path(self._run_name) / f"ckpt-step-{step}.pt"
-        model_artifact.add_file(ckpt_path.as_posix())
+        ckpt_path = (self._log_dir / f"ckpt-step-{step}.pt").as_posix()
+        model_artifact.add_file(ckpt_path)
         wandb.save(ckpt_path)
-        self._run.log(model_artifact)
+        self._run.log_artifact(model_artifact)
 
     def run_training(self, args):
         """Wraps wandb usage for training."""
@@ -257,11 +257,11 @@ class DIffGANTrainer(nn.Module):
     def _generate_student_images_to_log(self, step: int, prefix: str = "student", n_images=20):
         z = torch.randn(n_images, 3, self._params.resolution, self._params.resolution)
         time = torch.zeros(n_images, device=self._device)
-        images = self._student(z.to(self._device), time).sample
+        images = self._student(z.to(self._device), time).sample.cpu()
 
-        min_ = tensor_min(images, dims=(1, 2, 3))
-        max_ = tensor_max(images, dims=(1, 2, 3))
-        images = (images.cpu() - min_) / (max_ - min_)
+        min_ = tensor_min(images, dims=(1, 2, 3), keepdims=True)
+        max_ = tensor_max(images, dims=(1, 2, 3), keepdims=True)
+        images = (images - min_) / (max_ - min_)
         self._log_images(images=images, message=f"Student images on step {step}", prefix=prefix)
 
     def _generate_teacher_images_to_log(self, step: int, prefix: str = "teacher", n_images=20):
