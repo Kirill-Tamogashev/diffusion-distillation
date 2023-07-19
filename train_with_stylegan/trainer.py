@@ -12,7 +12,9 @@ import wandb
 from tqdm import tqdm
 
 from train_with_stylegan.utils import (
-    DiffusionScheduler
+    DiffusionScheduler,
+    tensor_max,
+    tensor_min,
 )
 
 
@@ -243,6 +245,13 @@ class DIffGANTrainer(nn.Module):
 
     @staticmethod
     def _log_images(images, prefix: str, message: str = ""):
+        """Log images with wandb.
+
+            Args:
+                images: Tensor[B, C, H, W] - images with values in [0, 1]
+                prefix: str
+                message: str
+        """
         grid = make_grid(images, nrow=10).permute(1, 2, 0)
         grid = grid.data.mul(255).numpy().astype(np.uint8)
         wandb.log({f"{prefix}/Images": wandb.Image(grid, caption=message)})
@@ -253,7 +262,9 @@ class DIffGANTrainer(nn.Module):
         time = torch.zeros(n_images, device=self._device)
         images = self._student(z.to(self._device), time).sample
 
-        images = images.cpu() / 2.0 + 0.5
+        min_ = tensor_min(images, dims=(1, 2, 3))
+        max_ = tensor_max(images, dims=(1, 2, 3))
+        images = (images.cpu() - min_) / (max_ - min_)
         self._log_images(images=images, message=f"Student images on step {step}", prefix=prefix)
 
     def _generate_teacher_images_to_log(self, step: int, prefix: str = "teacher", n_images=20):

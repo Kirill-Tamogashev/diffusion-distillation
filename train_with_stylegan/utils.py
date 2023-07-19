@@ -9,6 +9,18 @@ from diffusers import UNet2DModel
 from ml_collections import ConfigDict
 
 
+def tensor_min(x, dims, keepdims: bool = False):
+    for dim in dims:
+        x = torch.min(x, dim, keepdim=True)[0]
+    return x if keepdims else x.squeeze()
+
+
+def tensor_max(x, dims, keepdims: bool = False):
+    for dim in dims:
+        x = torch.max(x, dim, keepdim=True)[0]
+    return x if keepdims else x.squeeze()
+
+
 def load_params(args):
     with args.params.open("r") as f:
         config = yaml.safe_load(f)
