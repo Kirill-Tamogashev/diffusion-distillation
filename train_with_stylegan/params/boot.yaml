@@ -9,9 +9,9 @@ training:
     lr: 0.0001
     boundary_coeff: 200
     grads_log_freq: 1000
-    image_log_freq: 1000
-    save_ckpt_freq: 5000
-    log_model_artifact_freq: 15000
+    image_log_freq: 5000
+    save_ckpt_freq: 20000
+    log_model_artifact_freq: 50000
     beta_max: 20.0
     beta_min: 0.1
 unet:

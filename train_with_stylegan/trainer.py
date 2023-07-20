@@ -42,7 +42,7 @@ class DIffGANTrainer(nn.Module):
         self._student = student
 
         self._params = params.training
-        self._model_params = params.unet
+        self._full_params = params
 
         assert self._params.solver in {"heun", "euler"}, "Solver is not known"
 
@@ -152,8 +152,8 @@ class DIffGANTrainer(nn.Module):
                 if step % self._params.save_ckpt_freq == 0 and self._use_wandb:
                     self._save_checkpoint(step)
 
-                    if step % self._params.log_model_artifact_freq == 0:
-                        self._log_model_artifact(step)
+                if step % self._params.log_model_artifact_freq and self._use_wandb:
+                    self._log_model_artifact()
 
                 pbar.update()
 
@@ -192,23 +192,32 @@ class DIffGANTrainer(nn.Module):
         return images
 
     def _save_checkpoint(self, step):
+        ckpt_path = self._log_dir / f"ckpt-step-{step}.pt"
+        model = self._student.module if self._ddp else self._student
+
         ckpt_dict = {
-            "student":      self._student.module.state_dict() if self._ddp else self._student.state_dict(),
+            "student":      model.state_dict(),
             "student_opt":  self._opt_stu.state_dict(),
             "step":         step
         }
-        torch.save(ckpt_dict, self._log_dir / f"ckpt-step-{step}.pt")
+        torch.save(ckpt_dict, ckpt_path)
+        wandb.save(ckpt_path.as_posix())
 
-    def _log_model_artifact(self, step):
+    def _log_model_artifact(self):
         model_artifact = wandb.Artifact(
-            name=f"UNet-step-{step}.pt",
+            name=f"{self._run_name}-trained_model",
             type="model",
-            description=f"Checkpoint of a student model at step {step}",
-            metadata=dict(self._model_params)
+            description=f"Fully trained model, version: {self._run_name}",
+            metadata=dict(self._full_params)
         )
-        ckpt_path = (self._log_dir / f"ckpt-step-{step}.pt").as_posix()
-        model_artifact.add_file(ckpt_path)
+        ckpt_path = (self._log_dir / f"trained-model_{self._run_name}.pt").as_posix()
+        model = self._student.module if self._ddp else self._student
+
+        model.eval()
+        torch.save(model.state_dict, ckpt_path)
         wandb.save(ckpt_path)
+
+        model_artifact.add_file(ckpt_path)
         self._run.log_artifact(model_artifact)
 
     def run_training(self, args):
